@@ -205,7 +205,3 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-
-# jeju energy DB
-database/jeju_energy.db
-database/*.db
