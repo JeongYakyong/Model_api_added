@@ -33,6 +33,33 @@ assets = st.session_state['shared_assets']
 
 EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS
 
+import json
+import os
+
+# 저장할 파일 이름 설정
+BRIEFING_FILE = "briefing_storage.json"
+
+def load_briefings_from_file():
+    """로컬 JSON 파일에서 브리핑 데이터를 읽어옵니다."""
+    if os.path.exists(BRIEFING_FILE):
+        try:
+            with open(BRIEFING_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_briefing_to_file(date_key, text):
+    """특정 날짜의 브리핑을 로컬 JSON 파일에 저장합니다."""
+    data = load_briefings_from_file()
+    data[date_key] = text
+    try:
+        with open(BRIEFING_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"File save error: {e}")
+        
+
 # ==========================================
 # 헬퍼 함수
 # ==========================================
@@ -214,7 +241,7 @@ if lite_menu == "📈 예측 확인":
                 if not s_today['can_quick']:
                     st.session_state['_today_pred_error'] = (
                         "과거 데이터가 48시간 이상 부족합니다. "
-                        "[🚀 예측 실행] 메뉴에서 수동 수집을 먼저 진행해 주세요."
+                        "[DB 수집현황] 메뉴에서 수동 수집을 먼저 진행해 주세요."
                     )
                     st.rerun()
                 else:
@@ -521,24 +548,39 @@ if lite_menu == "📈 예측 확인":
                 yaxis=dict(fixedrange=True)
             )
             st.plotly_chart(fig, width="stretch")
+            # ── AI 예측 브리핑 섹션 (lite.py 내부) ──
+            with st.expander("AI 예측 브리핑", expanded=True):
+                date_key = str(vis_date)
+                
+                # 1. 파일에서 모든 브리핑 데이터를 로드 (세션에 없다면)
+                if 'lite_briefings_storage' not in st.session_state:
+                    st.session_state['lite_briefings_storage'] = load_briefings_from_file()
 
-            # ── 💡 AI 예측 브리핑 (기본 펼침) ──
-            with st.expander("💡 AI 예측 브리핑", expanded=True):
-                # 브리핑 생성 버튼 또는 자동 생성
-                if st.button("🤖 AI 브리핑 생성 / 갱신", key="lite_btn_ai_briefing"):
-                    with st.spinner("AI가 전력망 데이터를 분석하고 있습니다..."):
+                # 2. 현재 선택된 날짜에 해당하는 브리핑이 있는지 확인
+                saved_briefing = st.session_state['lite_briefings_storage'].get(date_key)
+
+                # 3. 브리핑 생성 버튼
+                if st.button("AI 브리핑 생성 / 갱신", key="lite_btn_ai_briefing"):
+                    with st.spinner("AI가 데이터를 분석하고 있습니다..."):
                         briefing_text = generate_energy_narrative(
                             df=df, 
                             warn_low=warn_low, 
                             warn_high=warn_high,
-                            smp_threshold=smp_threshold  # 이 줄을 추가합니다.
+                            smp_threshold=smp_threshold
                         )
-                        st.session_state['lite_ai_briefing'] = briefing_text
-                # 저장된 브리핑 내용이 있으면 출력
-                if 'lite_ai_briefing' in st.session_state:
-                    st.markdown(st.session_state['lite_ai_briefing'])
+                        
+                        # 로컬 파일에 저장
+                        save_briefing_to_file(date_key, briefing_text)
+                        
+                        # 세션 상태 업데이트 (화면 즉시 반영용)
+                        st.session_state['lite_briefings_storage'][date_key] = briefing_text
+                        st.rerun()
+                
+                # 4. 브리핑 내용 표시
+                if saved_briefing:
+                    st.markdown(saved_briefing)
                 else:
-                    st.caption("위 버튼을 눌러 오늘의 기상 및 전력망 영향 브리핑을 생성하세요.")
+                    st.caption("위 버튼을 눌러 해당 날짜의 브리핑을 생성하세요. 생성된 내용은 로컬에 자동 저장됩니다.")
 
             # ── 경고 설정 expander ──
             with st.expander("⚠️ 경고 임계값 설정", expanded=False):
