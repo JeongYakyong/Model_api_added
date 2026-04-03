@@ -123,7 +123,8 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
    -  고부하 → "순부하 증가로 LNG 발전량 증가 예상"
    -  정상 → "LNG 발전 운영 안정적 유지 전망"
 6. 다섯번째 항목 : [감지된 리스크]와 시간대별 순부하에 기반한 야간 LNG 운영 방향.
-7. "~입니다", "~습니다" 경어체."""
+7. "~입니다", "~습니다" 경어체.
+"""
 
     try:
         client = genai.Client()

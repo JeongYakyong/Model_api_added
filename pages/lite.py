@@ -235,13 +235,13 @@ if lite_menu == "📈 예측 확인":
         with col_overlay:
             st.checkbox("📊 실측값 오버레이", key='lite_show_actual_empty', disabled=True)
         with col_today:
-            if st.button("🔮 오늘 예측", type="primary", width='stretch', key="lite_btn_today_nodata"):
+            if st.button("🔮 바로 예측", type="primary", width='stretch', key="lite_btn_today_nodata"):
                 today = datetime.now().date()
                 s_today = get_data_status(today)
                 if not s_today['can_quick']:
                     st.session_state['_today_pred_error'] = (
                         "과거 데이터가 48시간 이상 부족합니다. "
-                        "[DB 수집현황] 메뉴에서 수동 수집을 먼저 진행해 주세요."
+                        "[🗂️ DB 수집 현황] 메뉴에서 수동 수집을 먼저 진행해 주세요."
                     )
                     st.rerun()
                 else:
@@ -282,13 +282,13 @@ if lite_menu == "📈 예측 확인":
                         st.session_state['_today_pred_error'] = f"예측 실패: {msg}"
                     st.rerun()
 
-        # ── 오늘 예측 결과 메시지 (rerun 후 토스트로 표시) ──
+        # ── 바로 예측 결과 메시지 (rerun 후 토스트로 표시) ──
         if '_today_pred_success' in st.session_state:
             st.toast(st.session_state.pop('_today_pred_success'), icon="✅")
         if '_today_pred_error' in st.session_state:
             st.toast(st.session_state.pop('_today_pred_error'), icon="❌")
 
-        st.warning("예측 데이터가 없습니다. [🔮 오늘 예측] 버튼을 눌러 예측을 실행하거나, [🚀 예측 실행] 메뉴를 이용해 주세요.")
+        st.warning("예측 데이터가 없습니다. [🔮 바로 예측] 버튼을 눌러 예측을 실행하거나, [🚀 예측 실행] 메뉴를 이용해 주세요.")
     else:
         df = df_res.copy()
         if not pd.api.types.is_datetime64_any_dtype(df.index):
@@ -383,9 +383,9 @@ if lite_menu == "📈 예측 확인":
             else:
                 st.caption("실측 데이터 없음")
 
-        # ── 오늘 예측 버튼 (col_today) ──
+        # ── 바로 예측 버튼 (col_today) ──
         with col_today:
-            if st.button("🔮 오늘 예측", type="primary", width='stretch', key="lite_btn_today"):
+            if st.button("🔮 바로 예측", type="primary", width='stretch', key="lite_btn_today"):
                 today = datetime.now().date()
                 s_today = get_data_status(today)
 
@@ -393,7 +393,7 @@ if lite_menu == "📈 예측 확인":
                 if not s_today['can_quick']:
                     st.session_state['_today_pred_error'] = (
                         "과거 데이터가 48시간 이상 부족합니다. "
-                        "[🚀 예측 실행] 메뉴에서 수동 수집을 먼저 진행해 주세요."
+                        "[] 메뉴에서 수동 수집을 먼저 진행해 주세요."
                     )
                     st.rerun()
                 else:
@@ -439,7 +439,7 @@ if lite_menu == "📈 예측 확인":
                         st.session_state['_today_pred_error'] = f"예측 실패: {msg}"
                     st.rerun()
 
-        # ── 오늘 예측 결과 메시지 (rerun 후 표시) ──
+        # ── 바로 예측 결과 메시지 (rerun 후 표시) ──
         if '_today_pred_success' in st.session_state:
             st.success(st.session_state.pop('_today_pred_success'))
         if '_today_pred_error' in st.session_state:
@@ -548,8 +548,9 @@ if lite_menu == "📈 예측 확인":
                 yaxis=dict(fixedrange=True)
             )
             st.plotly_chart(fig, width="stretch")
+            st.caption("매일 자정에 바로 예측버튼을 눌러 새 예보를 받을 수 있습니다. **발전 패턴은 순부하(net_demand)와 발전기, 연계선의 정비에 따라 변경될 수 있습니다.**")
             # ── AI 예측 브리핑 섹션 (lite.py 내부) ──
-            with st.expander("AI 예측 브리핑", expanded=True):
+            with st.expander("✨ AI 예측 브리핑", expanded=True):
                 date_key = str(vis_date)
                 
                 # 1. 파일에서 모든 브리핑 데이터를 로드 (세션에 없다면)
@@ -628,7 +629,7 @@ if lite_menu == "📈 예측 확인":
                     df[display_cols].style.apply(highlight_warnings, axis=1).format(precision=2),
                     width="stretch"
                 )
-            st.caption("순부하(net_demand)에 따라 발전계획이 달라집니다.그러나 발전기 혹은 HVDC 정비로 LNG발전 또한 패턴이 변경될 수 있습니다.")
+
 
 # ══════════════════════════════════════════
 # 🚀 예측 실행
