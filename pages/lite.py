@@ -548,7 +548,7 @@ if lite_menu == "📈 예측 확인":
                 yaxis=dict(fixedrange=True)
             )
             st.plotly_chart(fig, width="stretch")
-            st.caption("매일 자정 이후 [🔮 바로 예측] 버튼을 눌러 예보 업데이트가 가능합니다. **LNG발전은 순부하에 따라 제어되나 기력발전기 or 연계선의 정비에 따라 실제보다 발전량이 증가할 수 있습니다.**")
+            st.caption("매일 자정 이후 [🔮 바로 예측] 버튼을 눌러 예보 업데이트가 가능합니다. **LNG발전은 순부하에 따라 제어되나 기력발전기 or 연계선의 정비로 실제보다 발전량이 증가할 수 있습니다.**")
             # ── AI 예측 브리핑 섹션 (lite.py 내부) ──
             with st.expander("✨ AI 예측 브리핑", expanded=True):
                 date_key = str(vis_date)
