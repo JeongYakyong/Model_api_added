@@ -120,17 +120,18 @@ def _render_overview():
 
     st.write("### 핵심 워크플로우")
     st.write(
-        "이 시스템은 **데이터 수집 → 분석 → 예측 → 시각화 → 검증**의 "
+        "이 시스템은 **데이터 수집 → 예측 → 시각화 → 검증 → 분석**의 "
         "순환 구조로 설계되었습니다. "
         "각 단계는 사이드바 메뉴(Option A~E)에 대응합니다."
     )
 
     col1, col2, col3, col4, col5 = st.columns(5)
-    col1.markdown("**Option A : DB 관리**\n\n`데이터 수집`")
-    col2.markdown("**B. EDA**\n\n`탐색·분석`")
-    col3.markdown("**C. 예측**\n\n`모델 추론`")
-    col4.markdown("**D. 시각화**\n\n`결과 확인`")
-    col5.markdown("**E. 검증**\n\n`정확도 평가`")
+    col1.markdown("**A : DB 관리**\n\n`데이터 수집`")
+    col2.markdown("**B. 예측**\n\n`모델 추론`")
+    col3.markdown("**C. 시각화**\n\n`결과 확인`")
+    col4.markdown("**D. 검증**\n\n`정확도 평가`")
+    col5.markdown("**E. EDA**\n\n`탐색·분석`")
+
 
     st.markdown("---")
 
@@ -298,9 +299,9 @@ def _render_model_info():
         st.write("**태양광 모델**")
         st.write(
             "- seq_len: 336, pred_len: 24\n"
-            "- d_model: 128\n"
+            "- d_model: 256\n"
             "- num_heads: 4, num_layers: 3\n"
-            "- d_ff: 512\n"
+            "- d_ff: 1024\n"
             "- patch_len: 24, stride: 12\n"
             "- dropout: 0.2"
         )

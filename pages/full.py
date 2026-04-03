@@ -30,6 +30,9 @@ from utils.chart_helpers import (
     check_data_status, date_range_selector,
     merge_actual_and_forecast, plot_actual_vs_pred, draw_danger_zones
 )
+from utils.gemini import generate_energy_narrative
+
+
 
 # ==========================================
 # 공유 리소스 가져오기
@@ -37,6 +40,33 @@ from utils.chart_helpers import (
 db = st.session_state['shared_db']
 assets = st.session_state['shared_assets']
 
+# ==========================================
+# AI context 리소스 가져오기
+# ==========================================
+# 저장할 파일 이름 설정
+BRIEFING_FILE = "briefing_storage.json"
+
+def load_briefings_from_file():
+    """로컬 JSON 파일에서 브리핑 데이터를 읽어옵니다."""
+    if os.path.exists(BRIEFING_FILE):
+        try:
+            with open(BRIEFING_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_briefing_to_file(date_key, text):
+    """특정 날짜의 브리핑을 로컬 JSON 파일에 저장합니다."""
+    data = load_briefings_from_file()
+    data[date_key] = text
+    try:
+        with open(BRIEFING_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"File save error: {e}")
+        
+        
 # ==========================================
 # 사이드바 메뉴
 # ==========================================
@@ -936,13 +966,49 @@ elif menu == "Option C : 예측 결과 시각화":
                 )
                 
                 st.plotly_chart(fig, width="stretch")
-                # ── 차트 아래: 실측 오버레이 체크박스 ──
-                if has_actual:
-                    st.checkbox("📊 실측 데이터 오버레이", key='vis_show_actual')
+            # ── 차트 아래: 실측 오버레이 체크박스 ──
+            if has_actual:
+                st.checkbox("📊 실측 데이터 오버레이", key='vis_show_actual')
+            else:
+                st.info("ℹ️ 실측 데이터가 없습니다. 새로고침 혹은 API 데이터 호출이 필요합니다.")
+                
+            st.caption("순부하(net_demand) : 전체 부하에서 신재생발전을 제외한 내연 발전기 및 연계선이 담당해야 할 총 전력부하로 전력거래소에서 판단하여 제어.")
+        
+            # ── AI 예측 브리핑 섹션 
+            with st.expander("AI 예측 브리핑", expanded=True):
+                date_key = str(target_date)
+                
+                # 1. 파일에서 모든 브리핑 데이터를 로드 (세션에 없다면)
+                if 'lite_briefings_storage' not in st.session_state:
+                    st.session_state['lite_briefings_storage'] = load_briefings_from_file()
+
+                # 2. 현재 선택된 날짜에 해당하는 브리핑이 있는지 확인
+                saved_briefing = st.session_state['lite_briefings_storage'].get(date_key)
+
+                # 3. 브리핑 생성 버튼
+                if st.button("AI 브리핑 생성 / 갱신", key="lite_btn_ai_briefing"):
+                    with st.spinner("AI가 데이터를 분석하고 있습니다..."):
+                        briefing_text = generate_energy_narrative(
+                        df=df, 
+                        warn_low=warning_threshold,      # 또는 w_low
+                        warn_high=warning_threshold2,    # 또는 w_high  
+                        smp_threshold=smp_threshold
+                        )
+                        
+                        # 로컬 파일에 저장
+                        save_briefing_to_file(date_key, briefing_text)
+                        
+                        # 세션 상태 업데이트 (화면 즉시 반영용)
+                        st.session_state['lite_briefings_storage'][date_key] = briefing_text
+                        st.rerun()
+                
+                # 4. 브리핑 내용 표시
+                if saved_briefing:
+                    st.markdown(saved_briefing)
                 else:
-                    st.info("ℹ️ 실측 데이터가 없습니다. 새로고침 혹은 API 데이터 호출이 필요합니다.")
-                st.caption("순부하(net_demand) : 전체 부하에서 신재생발전을 제외한 내연 발전기 및 연계선이 담당해야 할 총 전력부하로 전력거래소에서 판단하여 제어.")
-            
+                    st.caption("위 버튼을 눌러 해당 날짜의 브리핑을 생성하세요. 생성된 내용은 로컬에 자동 저장됩니다.")
+                    
+
             # ── 차트 아래: 경고 기준 설정 (expander, 기본 접힘) ──
             with st.expander("🚨 경고 기준 설정", expanded=False):
                 st.caption("est_net_demand 기준으로 위험 구간을 음영 처리합니다.")

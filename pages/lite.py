@@ -477,16 +477,17 @@ if lite_menu == "📈 예측 확인":
                 'est_demand':      'real_demand',
             }
 
+ 
             for var in selected_vars:
                 if var not in df.columns:
                     continue
                 is_net = (var == 'est_net_demand')
 
-                # 예측: net_demand만 점선(dot), 나머지 실선
+                # 예측: 오버레이 꺼짐→solid, 켜짐→dash
                 line_style = dict(
                     color=colors.get(var, 'black'),
                     width=4 if is_net else 2,
-                    dash='dot' if is_net else 'solid'
+                    dash='dash' if overlay_active else 'solid'
                 )
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df[var],
@@ -494,16 +495,15 @@ if lite_menu == "📈 예측 확인":
                     line=line_style, hovertemplate='%{y:,.1f}'
                 ))
 
-                # 실측 오버레이
+                # 실측: 전부 solid (오버레이 켜졌을 때만 표시)
                 if overlay_active:
                     actual_col = actual_map.get(var)
                     if actual_col and actual_col in selected_actual and actual_col in df.columns:
                         is_actual_net = (actual_col == 'real_net_demand')
-                        # 실측: net_demand만 실선+굵게, 나머지는 dash
                         actual_line = dict(
                             color=colors.get(var, 'gray'),
                             width=3 if is_actual_net else 2,
-                            dash='solid' if is_actual_net else 'dash'
+                            dash='solid'
                         )
                         fig.add_trace(go.Scatter(
                             x=df.index, y=df[actual_col],
@@ -515,9 +515,9 @@ if lite_menu == "📈 예측 확인":
             # 위험 구간 표시
             if 'est_net_demand' in df.columns:
                 draw_danger_zones(fig, df, df['est_net_demand'] < warn_low,
-                                  'red', annotation_text='저부하 주의', show_legend_label='저부하 구간')
+                                  'red', annotation_text='LNG 저발전 구간', show_legend_label='저발전 구간')
                 draw_danger_zones(fig, df, df['est_net_demand'] > warn_high,
-                                  'blue', annotation_text='고부하 주의', show_legend_label='고부하 구간')
+                                  'blue', annotation_text='LNG 고발전 구간', show_legend_label='고발전 구간')
 
             if st.session_state.get('lite_warn_min_enabled') and 'est_renew_total' in df.columns:
                 draw_danger_zones(fig, df, df['est_renew_total'] < st.session_state['lite_warn_min'],
@@ -586,8 +586,8 @@ if lite_menu == "📈 예측 확인":
             with st.expander("⚠️ 경고 임계값 설정", expanded=False):
                 ec1, ec2 = st.columns(2)
                 with ec1:
-                    st.number_input("저부하 임계값 (MW)", value=warn_low, step=10, key='lite_warn_low')
-                    st.number_input("고부하 임계값 (MW)", value=warn_high, step=10, key='lite_warn_high')
+                    st.number_input("저발전 임계값 (MW)", value=warn_low, step=10, key='lite_warn_low')
+                    st.number_input("고발전 임계값 (MW)", value=warn_high, step=10, key='lite_warn_high')
                 with ec2:
                     st.checkbox("🟣 최저발전 경고", key='lite_warn_min_enabled')
                     if st.session_state['lite_warn_min_enabled']:
@@ -628,7 +628,7 @@ if lite_menu == "📈 예측 확인":
                     df[display_cols].style.apply(highlight_warnings, axis=1).format(precision=2),
                     width="stretch"
                 )
-
+            st.caption("순부하(net_demand)에 따라 발전계획이 달라집니다.그러나 발전기 혹은 HVDC 정비로 LNG발전 또한 패턴이 변경될 수 있습니다.")
 
 # ══════════════════════════════════════════
 # 🚀 예측 실행
