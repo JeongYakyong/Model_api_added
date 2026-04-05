@@ -31,6 +31,14 @@ from utils.gemini import (
 # ==========================================
 # 공유 리소스
 # ==========================================
+# ==========================================
+# 공유 리소스 (app.py를 거치지 않았을 때도 안전하게)
+# ==========================================
+if 'authenticated' not in st.session_state or not st.session_state['authenticated']:
+    st.warning("⚠️ 먼저 메인 페이지에서 비밀번호를 입력해주세요.")
+    st.page_link("app.py", label="🔑 메인 페이지로 이동", icon="🏠")
+    st.stop()
+
 db = st.session_state['shared_db']
 assets = st.session_state['shared_assets']
 
