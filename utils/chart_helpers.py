@@ -73,6 +73,42 @@ COLORS = {
     'error': 'tomato',              # red → tomato
 }
 
+# est_ 변수별 색상 (COLORS 기반)
+EST_COLORS = {
+    'est_demand':      COLORS['demand'],
+    'est_net_demand':  COLORS['net_demand'],
+    'est_solar_gen':   COLORS['solar_est'],
+    'est_wind_gen':    COLORS['wind_est'],
+    'est_renew_total': COLORS['renew_total'],
+}
+
+# 예측 항목 레이블
+PLOT_OPTIONS = {
+    'est_demand':      '총 전력수요 예측 (est_demand)',
+    'est_net_demand':  '순부하 예측 (est_net_demand)',
+    'est_solar_gen':   '태양광 발전량 예측 (est_solar_gen)',
+    'est_wind_gen':    '풍력 발전량 예측 (est_wind_gen)',
+    'est_renew_total': '총 재생에너지 발전량 (est_renew_total)',
+}
+
+# 실측 항목 레이블
+ACTUAL_LABEL_MAP = {
+    'real_demand':      '수요 실측',
+    'real_solar_gen':   '태양광 실측',
+    'real_wind_gen':    '풍력 실측',
+    'real_renew_total': '재생E 실측 합계',
+    'real_net_demand':  '순부하 실측',
+}
+
+# 예측 → 실측 컬럼 매핑
+ACTUAL_MAP = {
+    'est_solar_gen':   'real_solar_gen',
+    'est_wind_gen':    'real_wind_gen',
+    'est_renew_total': 'real_renew_total',
+    'est_net_demand':  'real_net_demand',
+    'est_demand':      'real_demand',
+}
+
 
 # ==========================================
 # 데이터 무결성 검사

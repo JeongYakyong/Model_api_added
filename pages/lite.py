@@ -14,15 +14,18 @@ from datetime import datetime, timedelta
 
 from utils.data_pipeline import (
     daily_historical_kpx, daily_historical_kma, daily_historical_kpx_smp,
-    run_model_prediction, daily_forecast_kpx, daily_forecast_kma
+    run_model_prediction, daily_forecast_kpx, daily_forecast_kma,
+    run_today_prediction,
 )
 from utils.chart_helpers import (
     EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, COLORS,
-    merge_actual_and_forecast, draw_danger_zones
+    merge_actual_and_forecast, draw_danger_zones,
+    PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
 )
-
-from utils.gemini import generate_energy_narrative
-
+from utils.gemini import (
+    generate_energy_narrative,
+    load_briefings_from_file, save_briefing_to_file, render_briefing_expander,
+)
 
 
 # ==========================================
@@ -32,32 +35,6 @@ db = st.session_state['shared_db']
 assets = st.session_state['shared_assets']
 
 EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS
-
-import json
-import os
-
-# 저장할 파일 이름 설정
-BRIEFING_FILE = "briefing_storage.json"
-
-def load_briefings_from_file():
-    """로컬 JSON 파일에서 브리핑 데이터를 읽어옵니다."""
-    if os.path.exists(BRIEFING_FILE):
-        try:
-            with open(BRIEFING_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def save_briefing_to_file(date_key, text):
-    """특정 날짜의 브리핑을 로컬 JSON 파일에 저장합니다."""
-    data = load_briefings_from_file()
-    data[date_key] = text
-    try:
-        with open(BRIEFING_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"File save error: {e}")
         
 
 # ==========================================
@@ -214,12 +191,26 @@ if lite_menu == "📈 예측 확인":
             st.session_state[k] = v
 
     # ── 날짜 / 표시항목 / 오버레이 / 오늘예측 — 한 줄 ──
-    col_date, col_btn, col_overlay, col_today = st.columns([2, 1, 1.5, 1.5])
+    col_prev, col_date, col_next, col_btn, col_overlay, col_today = st.columns([0.3, 1, 0.3, 1, 1, 1])
     st.markdown("---")
+
+    # 이전/다음 날 버튼 — st.session_state['lite_vis_date']를 직접 수정 후 rerun
+    with col_prev:
+        if st.button("＜", width='stretch', key="lite_btn_prev_day"):
+            cur = st.session_state.get('lite_vis_date', datetime.now().date())
+            st.session_state['lite_vis_date'] = cur - timedelta(days=1)
+            st.rerun()
+    with col_next:
+        if st.button("＞", width='stretch', key="lite_btn_next_day"):
+            cur = st.session_state.get('lite_vis_date', datetime.now().date())
+            st.session_state['lite_vis_date'] = cur + timedelta(days=1)
+            st.rerun()
+
     with col_date:
         vis_date = st.date_input(
             "조회 날짜",
-            st.session_state.get('lite_last_pred_date', datetime.now().date()),
+            st.session_state.get('lite_vis_date',
+                                 st.session_state.get('lite_last_pred_date', datetime.now().date())),
             key="lite_vis_date",
             label_visibility="collapsed"
         )
@@ -227,74 +218,33 @@ if lite_menu == "📈 예측 확인":
     start_str = f"{vis_date} 00:00:00"
     end_str   = f"{vis_date} 23:00:00"
     df_res    = db.get_forecast(start_str, end_str)
+    has_data  = not (df_res.empty
+                     or 'est_Solar_Utilization' not in df_res.columns
+                     or df_res['est_Solar_Utilization'].isnull().all())
 
-    if df_res.empty or 'est_Solar_Utilization' not in df_res.columns \
-            or df_res['est_Solar_Utilization'].isnull().all():
+    # ── 바로 예측 버튼 (항상 활성) ──
+    with col_today:
+        if st.button("🔮 바로 예측", type="primary", width='stretch', key="lite_btn_today"):
+            run_today_prediction(db, assets)
+
+    # ── 예측 결과 토스트 ──
+    if '_today_pred_success' in st.session_state:
+        st.toast(st.session_state.pop('_today_pred_success'), icon="✅")
+    if '_today_pred_error' in st.session_state:
+        st.toast(st.session_state.pop('_today_pred_error'), icon="❌")
+
+    if not has_data:
         with col_btn:
             st.button("⚙️ 표시 항목", width='stretch', key="lite_btn_plot_items_empty", disabled=True)
         with col_overlay:
-            st.checkbox("📊 실측값 오버레이", key='lite_show_actual_empty', disabled=True)
-        with col_today:
-            if st.button("🔮 바로 예측", type="primary", width='stretch', key="lite_btn_today_nodata"):
-                today = datetime.now().date()
-                s_today = get_data_status(today)
-                if not s_today['can_quick']:
-                    st.session_state['_today_pred_error'] = (
-                        "과거 데이터가 48시간 이상 부족합니다. "
-                        "[🗂️ DB 수집 현황] 메뉴에서 수동 수집을 먼저 진행해 주세요."
-                    )
-                    st.rerun()
-                else:
-                    with st.spinner("① KPX 실측 수집 중..."):
-                        try:
-                            h_end_q   = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-                            h_start_q = (today - timedelta(days=3)).strftime("%Y-%m-%d")
-                            if s_today['past_gap'] > 0 or s_today['past_missing'] > 0:
-                                daily_historical_kpx(h_start_q, h_end_q)
-                        except Exception:
-                            pass
-                    with st.spinner("② KMA 실측 수집 중..."):
-                        try:
-                            if s_today['past_gap'] > 0 or s_today['past_missing'] > 0:
-                                daily_historical_kma(h_start_q, h_end_q)
-                                daily_historical_kpx_smp(h_start_q, h_end_q)
-                        except Exception:
-                            pass
-                    with st.spinner("③ KPX 예보 수집 중..."):
-                        try:
-                            tgt = today.strftime("%Y-%m-%d")
-                            daily_forecast_kpx(tgt, tgt)
-                        except Exception:
-                            pass
-                    with st.spinner("④ KMA 예보 수집 중 (다소 오래 걸릴 수 있습니다)..."):
-                        try:
-                            daily_forecast_kma(tgt, tgt)
-                        except Exception:
-                            pass
-                    with st.spinner("⑤ 모델 예측 실행 중..."):
-                        ok, msg, _ = run_model_prediction(
-                            today.strftime('%Y-%m-%d'), db, assets
-                        )
-                    if ok:
-                        st.session_state['lite_last_pred_date'] = today
-                        st.session_state['_today_pred_success'] = msg
-                    else:
-                        st.session_state['_today_pred_error'] = f"예측 실패: {msg}"
-                    st.rerun()
-
-        # ── 바로 예측 결과 메시지 (rerun 후 토스트로 표시) ──
-        if '_today_pred_success' in st.session_state:
-            st.toast(st.session_state.pop('_today_pred_success'), icon="✅")
-        if '_today_pred_error' in st.session_state:
-            st.toast(st.session_state.pop('_today_pred_error'), icon="❌")
-
+            st.button("📊 실측 OFF", width='stretch', disabled=True, key="lite_btn_overlay_empty")
         st.warning("예측 데이터가 없습니다. [🔮 바로 예측] 버튼을 눌러 예측을 실행하거나, [🚀 예측 실행] 메뉴를 이용해 주세요.")
     else:
         df = df_res.copy()
         if not pd.api.types.is_datetime64_any_dtype(df.index):
             df.index = pd.to_datetime(df.index)
 
-        # 파생 컬럼 계산 (app.py Option C와 동일)
+        # 파생 컬럼 계산
         df['est_solar_gen'] = df['est_Solar_Utilization'] * df['Solar_Capacity_Est']
         df['est_wind_gen'] = df['est_Wind_Utilization'] * df['Wind_Capacity_Est']
         df['est_renew_total'] = df['est_solar_gen'] + df['est_wind_gen']
@@ -305,15 +255,13 @@ if lite_menu == "📈 예측 확인":
             'est_smp_jeju' if 'est_smp_jeju' in df.columns else None
         )
 
-        # ── 실측 데이터 병합 (app.py Option C와 동일) ──
+        # ── 실측 데이터 병합 ──
         hist_df = db.get_historical(start_str, f"{vis_date} 23:59:59")
         has_actual = False
-
         if not hist_df.empty:
             if not pd.api.types.is_datetime64_any_dtype(hist_df.index):
                 hist_df.index = pd.to_datetime(hist_df.index)
-            actual_cols = ['real_solar_gen', 'real_wind_gen', 'real_demand', 'real_renew_gen']
-            for col in actual_cols:
+            for col in ['real_solar_gen', 'real_wind_gen', 'real_demand', 'real_renew_gen']:
                 if col in hist_df.columns:
                     df[col] = hist_df[col].reindex(df.index)
             if 'real_solar_gen' in df.columns and df['real_solar_gen'].notna().any():
@@ -323,25 +271,12 @@ if lite_menu == "📈 예측 확인":
                     df['real_net_demand'] = df['real_demand'] - df['real_renew_total']
 
         # ── 표시 항목 설정 dialog ──
-        plot_options = {
-            'est_demand':      '총 전력수요 예측 (est_demand)',
-            'est_net_demand':  '순부하 예측 (est_net_demand)',
-            'est_solar_gen':   '태양광 발전량 예측 (est_solar_gen)',
-            'est_wind_gen':    '풍력 발전량 예측 (est_wind_gen)',
-            'est_renew_total': '총 재생에너지 발전량 (est_renew_total)',
-        }
+        plot_options = dict(PLOT_OPTIONS)
         if smp_col:
             plot_options[smp_col] = f'제주 SMP 가격 ({smp_col})'
 
-        actual_label_map = {
-            'real_demand':      '수요 실측',
-            'real_solar_gen':   '태양광 실측',
-            'real_wind_gen':    '풍력 실측',
-            'real_renew_total': '재생E 실측 합계',
-            'real_net_demand':  '순부하 실측',
-        }
         available_actual = {
-            col: label for col, label in actual_label_map.items()
+            col: label for col, label in ACTUAL_LABEL_MAP.items()
             if has_actual and col in df.columns and df[col].notna().any()
         }
 
@@ -351,16 +286,18 @@ if lite_menu == "📈 예측 확인":
             with col1:
                 st.write("**예측 데이터**")
                 current_est = st.session_state.get('lite_vis_vars', [])
-                est_selections = {}
-                for key, label in plot_options.items():
-                    est_selections[key] = st.checkbox(label, value=(key in current_est), key=f"lite_dlg_est_{key}")
+                est_selections = {
+                    key: st.checkbox(label, value=(key in current_est), key=f"lite_dlg_est_{key}")
+                    for key, label in plot_options.items()
+                }
             with col2:
                 st.write("**실측 항목 선택**")
                 if available_actual:
                     current_act = st.session_state.get('lite_vis_actual', [])
-                    act_selections = {}
-                    for key, label in available_actual.items():
-                        act_selections[key] = st.checkbox(label, value=(key in current_act), key=f"lite_dlg_act_{key}")
+                    act_selections = {
+                        key: st.checkbox(label, value=(key in current_act), key=f"lite_dlg_act_{key}")
+                        for key, label in available_actual.items()
+                    }
                 else:
                     st.caption("실측 데이터 없음")
                     act_selections = {}
@@ -371,86 +308,27 @@ if lite_menu == "📈 예측 확인":
                     st.session_state['lite_vis_actual'] = [k for k, v in act_selections.items() if v]
                 st.rerun()
 
-        # ── 표시항목 버튼 (col_btn) ──
+        # ── 표시항목 / 오버레이 버튼 ──
         with col_btn:
             if st.button("⚙️ 표시 항목", width='stretch', key="lite_btn_plot_items"):
                 select_plot_items()
-
-        # ── 오버레이 체크박스 (col_overlay) ──
         with col_overlay:
             if has_actual and available_actual:
-                st.checkbox("📊 실측값 오버레이", key='lite_show_actual')
+                is_on = st.session_state.get('lite_show_actual', False)
+                if st.button("📊 실측 ON" if is_on else "📊 실측 OFF",
+                             type="primary" if is_on else "secondary",
+                             width='stretch', key="lite_btn_overlay_toggle"):
+                    st.session_state['lite_show_actual'] = not is_on
+                    st.rerun()
             else:
-                st.caption("실측 데이터 없음")
-
-        # ── 바로 예측 버튼 (col_today) ──
-        with col_today:
-            if st.button("🔮 바로 예측", type="primary", width='stretch', key="lite_btn_today"):
-                today = datetime.now().date()
-                s_today = get_data_status(today)
-
-                # 48h 이상 부족하면 수동 수집 안내
-                if not s_today['can_quick']:
-                    st.session_state['_today_pred_error'] = (
-                        "과거 데이터가 48시간 이상 부족합니다. "
-                        "[] 메뉴에서 수동 수집을 먼저 진행해 주세요."
-                    )
-                    st.rerun()
-                else:
-                    with st.spinner("① KPX 실측 수집 중..."):
-                        try:
-                            h_end_q   = (today - timedelta(days=1)).strftime("%Y-%m-%d")
-                            h_start_q = (today - timedelta(days=3)).strftime("%Y-%m-%d")
-                            if s_today['past_gap'] > 0 or s_today['past_missing'] > 0:
-                                daily_historical_kpx(h_start_q, h_end_q)
-                        except Exception:
-                            pass
-
-                    with st.spinner("② KMA 실측 수집 중..."):
-                        try:
-                            if s_today['past_gap'] > 0 or s_today['past_missing'] > 0:
-                                daily_historical_kma(h_start_q, h_end_q)
-                                daily_historical_kpx_smp(h_start_q, h_end_q)
-                        except Exception:
-                            pass
-
-                    with st.spinner("③ KPX 예보 수집 중..."):
-                        try:
-                            tgt = today.strftime("%Y-%m-%d")
-                            daily_forecast_kpx(tgt, tgt)
-                        except Exception:
-                            pass
-
-                    with st.spinner("④ KMA 예보 수집 중 (다소 오래 걸릴 수 있습니다)..."):
-                        try:
-                            daily_forecast_kma(tgt, tgt)
-                        except Exception:
-                            pass
-
-                    with st.spinner("⑤ 모델 예측 실행 중..."):
-                        ok, msg, _ = run_model_prediction(
-                            today.strftime('%Y-%m-%d'), db, assets
-                        )
-
-                    if ok:
-                        st.session_state['lite_last_pred_date'] = today
-                        st.session_state['_today_pred_success'] = msg
-                    else:
-                        st.session_state['_today_pred_error'] = f"예측 실패: {msg}"
-                    st.rerun()
-
-        # ── 바로 예측 결과 메시지 (rerun 후 표시) ──
-        if '_today_pred_success' in st.session_state:
-            st.success(st.session_state.pop('_today_pred_success'))
-        if '_today_pred_error' in st.session_state:
-            st.error(st.session_state.pop('_today_pred_error'))
+                st.button("📊 실측 OFF", width='stretch', disabled=True, key="lite_btn_overlay_disabled")
 
         selected_vars   = st.session_state['lite_vis_vars']
         selected_actual = st.session_state['lite_vis_actual']
         show_actual     = st.session_state.get('lite_show_actual', False)
-        warn_low  = st.session_state['lite_warn_low']
-        warn_high = st.session_state['lite_warn_high']
-        smp_threshold = st.session_state['lite_smp_low'] if smp_col else 0
+        warn_low        = st.session_state['lite_warn_low']
+        warn_high       = st.session_state['lite_warn_high']
+        smp_threshold   = st.session_state['lite_smp_low'] if smp_col else 0
 
         if not selected_vars:
             st.info("👉 [⚙️ 표시 항목] 버튼을 눌러 시각화할 데이터를 선택하세요.")
@@ -459,57 +337,32 @@ if lite_menu == "📈 예측 확인":
 
             # ── 메인 차트 ──
             fig = go.Figure()
-            colors = {
-                'est_demand':      COLORS['demand'],
-                'est_net_demand':  COLORS['net_demand'],
-                'est_solar_gen':   COLORS['solar_est'],
-                'est_wind_gen':    COLORS['wind_est'],
-                'est_renew_total': COLORS['renew_total'],
-            }
+            colors = dict(EST_COLORS)
             if smp_col:
                 colors[smp_col] = COLORS['smp']
 
-            actual_map = {
-                'est_solar_gen':   'real_solar_gen',
-                'est_wind_gen':    'real_wind_gen',
-                'est_renew_total': 'real_renew_total',
-                'est_net_demand':  'real_net_demand',
-                'est_demand':      'real_demand',
-            }
-
- 
             for var in selected_vars:
                 if var not in df.columns:
                     continue
                 is_net = (var == 'est_net_demand')
-
-                # 예측: 오버레이 꺼짐→solid, 켜짐→dash
-                line_style = dict(
-                    color=colors.get(var, 'black'),
-                    width=4 if is_net else 2,
-                    dash='dash' if overlay_active else 'solid'
-                )
                 fig.add_trace(go.Scatter(
                     x=df.index, y=df[var],
                     name=plot_options.get(var, var).split('(')[0].strip(),
-                    line=line_style, hovertemplate='%{y:,.1f}'
+                    line=dict(color=colors.get(var, 'black'),
+                              width=3 if is_net else 2,
+                              dash='dash'),
+                    hovertemplate='%{y:,.1f}'
                 ))
-
-                # 실측: 전부 solid (오버레이 켜졌을 때만 표시)
                 if overlay_active:
-                    actual_col = actual_map.get(var)
+                    actual_col = ACTUAL_MAP.get(var)
                     if actual_col and actual_col in selected_actual and actual_col in df.columns:
-                        is_actual_net = (actual_col == 'real_net_demand')
-                        actual_line = dict(
-                            color=colors.get(var, 'gray'),
-                            width=3 if is_actual_net else 2,
-                            dash='solid'
-                        )
                         fig.add_trace(go.Scatter(
                             x=df.index, y=df[actual_col],
-                            name=actual_label_map.get(actual_col, actual_col),
-                            line=actual_line, opacity=0.7,
-                            hovertemplate='%{y:,.1f}'
+                            name=ACTUAL_LABEL_MAP.get(actual_col, actual_col),
+                            line=dict(color=colors.get(var, 'gray'),
+                                      width=3 if actual_col == 'real_net_demand' else 2,
+                                      dash='solid'),
+                            opacity=0.85, hovertemplate='%{y:,.1f}'
                         ))
 
             # 위험 구간 표시
@@ -518,7 +371,6 @@ if lite_menu == "📈 예측 확인":
                                   'red', annotation_text='LNG 저발전 구간', show_legend_label='저발전 구간')
                 draw_danger_zones(fig, df, df['est_net_demand'] > warn_high,
                                   'blue', annotation_text='LNG 고발전 구간', show_legend_label='고발전 구간')
-
             if st.session_state.get('lite_warn_min_enabled') and 'est_renew_total' in df.columns:
                 draw_danger_zones(fig, df, df['est_renew_total'] < st.session_state['lite_warn_min'],
                                   'brown', show_legend_label='최저발전 경고')
@@ -528,60 +380,23 @@ if lite_menu == "📈 예측 확인":
 
             # 현재시각 세로선
             now = datetime.now()
-            day_start = datetime.combine(vis_date, datetime.min.time())
-            day_end   = datetime.combine(vis_date, datetime.max.time())
-            if day_start <= now <= day_end:
+            if datetime.combine(vis_date, datetime.min.time()) <= now <= datetime.combine(vis_date, datetime.max.time()):
                 now_str = now.strftime('%Y-%m-%d %H:%M:%S')
                 fig.add_vline(x=now_str, line_width=1, line_dash="solid", line_color="tomato")
-                fig.add_annotation(
-                    x=now_str, y=-0.038, yref="paper",
-                    text="현재", showarrow=False,
-                    font=dict(size=10, color="tomato"),
-                )
+                fig.add_annotation(x=now_str, y=-0.038, yref="paper", text="현재",
+                                   showarrow=False, font=dict(size=10, color="tomato"))
 
             fig.update_layout(
                 title=f"{vis_date} 예측 결과",
-                hovermode="x unified",
-                yaxis_title="MW",
+                hovermode="x unified", yaxis_title="MW",
                 legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                dragmode='zoom',
-                yaxis=dict(fixedrange=True)
+                dragmode='zoom', yaxis=dict(fixedrange=True)
             )
             st.plotly_chart(fig, width="stretch")
             st.caption("매일 자정 이후 [🔮 바로 예측] 버튼을 눌러 예보 업데이트가 가능합니다. **LNG발전은 순부하(전력수요 - 신재생발전량)에 따라 제어되나 기력발전기 or 연계선의 정비로 실제보다 발전량이 증가할 수 있습니다.**")
-            # ── AI 예측 브리핑 섹션 (lite.py 내부) ──
-            with st.expander("✨ AI 예측 브리핑", expanded=True):
-                date_key = str(vis_date)
-                
-                # 1. 파일에서 모든 브리핑 데이터를 로드 (세션에 없다면)
-                if 'lite_briefings_storage' not in st.session_state:
-                    st.session_state['lite_briefings_storage'] = load_briefings_from_file()
 
-                # 2. 현재 선택된 날짜에 해당하는 브리핑이 있는지 확인
-                saved_briefing = st.session_state['lite_briefings_storage'].get(date_key)
-
-                # 3. 브리핑 생성 버튼
-                if st.button("AI 브리핑 생성 / 갱신", key="lite_btn_ai_briefing"):
-                    with st.spinner("AI가 데이터를 분석하고 있습니다..."):
-                        briefing_text = generate_energy_narrative(
-                            df=df, 
-                            warn_low=warn_low, 
-                            warn_high=warn_high,
-                            smp_threshold=smp_threshold
-                        )
-                        
-                        # 로컬 파일에 저장
-                        save_briefing_to_file(date_key, briefing_text)
-                        
-                        # 세션 상태 업데이트 (화면 즉시 반영용)
-                        st.session_state['lite_briefings_storage'][date_key] = briefing_text
-                        st.rerun()
-                
-                # 4. 브리핑 내용 표시
-                if saved_briefing:
-                    st.markdown(saved_briefing)
-                else:
-                    st.caption("위 버튼을 눌러 해당 날짜의 브리핑을 생성하세요. 생성된 내용은 로컬에 자동 저장됩니다.")
+            render_briefing_expander(df, warn_low, warn_high, smp_threshold, vis_date,
+                                     btn_key="lite_btn_ai_briefing")
 
             # ── 경고 설정 expander ──
             with st.expander("⚠️ 경고 임계값 설정", expanded=False):

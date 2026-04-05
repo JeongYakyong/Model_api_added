@@ -28,9 +28,13 @@ from models.architecture import PatchTST_Weather_Model
 from utils.chart_helpers import (
     EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, COLORS,
     check_data_status, date_range_selector,
-    merge_actual_and_forecast, plot_actual_vs_pred, draw_danger_zones
+    merge_actual_and_forecast, plot_actual_vs_pred, draw_danger_zones,
+    PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
 )
-from utils.gemini import generate_energy_narrative
+from utils.gemini import (
+    generate_energy_narrative,
+    load_briefings_from_file, save_briefing_to_file, render_briefing_expander,
+)
 
 
 
@@ -40,31 +44,6 @@ from utils.gemini import generate_energy_narrative
 db = st.session_state['shared_db']
 assets = st.session_state['shared_assets']
 
-# ==========================================
-# AI context 리소스 가져오기
-# ==========================================
-# 저장할 파일 이름 설정
-BRIEFING_FILE = "briefing_storage.json"
-
-def load_briefings_from_file():
-    """로컬 JSON 파일에서 브리핑 데이터를 읽어옵니다."""
-    if os.path.exists(BRIEFING_FILE):
-        try:
-            with open(BRIEFING_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return {}
-    return {}
-
-def save_briefing_to_file(date_key, text):
-    """특정 날짜의 브리핑을 로컬 JSON 파일에 저장합니다."""
-    data = load_briefings_from_file()
-    data[date_key] = text
-    try:
-        with open(BRIEFING_FILE, "w", encoding="utf-8") as f:
-            json.dump(data, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"File save error: {e}")
         
         
 # ==========================================
@@ -772,26 +751,11 @@ elif menu == "Option C : 예측 결과 시각화":
         if 'vis_actual_cols' not in st.session_state:
             st.session_state['vis_actual_cols'] = ['real_demand', 'real_solar_gen', 'real_wind_gen', 'real_renew_total', 'real_net_demand']
         
-        plot_options = {
-            'est_demand': '총 전력수요 예측 (est_demand)',
-            'est_net_demand': '순부하 예측 (est_net_demand)',
-            'est_solar_gen': '태양광 발전량 예측 (est_solar_gen)',
-            'est_wind_gen': '풍력 발전량 예측 (est_wind_gen)',
-            'est_renew_total': '총 재생에너지 발전량 (est_renew_total)'
-        }
+        plot_options = dict(PLOT_OPTIONS)
         if smp_col:
             plot_options[smp_col] = f'제주 SMP 가격 ({smp_col})'
-        
-        # ── 표시 항목 설정 dialog ──
-                # ── 표시 항목 설정 dialog (예측 + 실측 통합) ──
-        actual_label_map = {
-            'real_demand': '수요 실측',
-            'real_solar_gen': '태양광 실측',
-            'real_wind_gen': '풍력 실측',
-            'real_renew_total': '재생E 실측 합계',
-            'real_net_demand': '순부하 실측',
-        }
-        available_actual = {col: label for col, label in actual_label_map.items() 
+
+        available_actual = {col: label for col, label in ACTUAL_LABEL_MAP.items()
                             if col in df.columns and df[col].notna().any()} if has_actual else {}
         
         @st.dialog("📊 표시 항목 설정")
@@ -856,62 +820,37 @@ elif menu == "Option C : 예측 결과 시각화":
                 overlay_active = show_actual and len(selected_actual_cols) > 0
                 
                 fig = go.Figure()
-                colors = {
-                    'est_demand': COLORS['demand'] if 'COLORS' in globals() else 'black', 
-                    'est_net_demand': COLORS['net_demand'] if 'COLORS' in globals() else 'blue', 
-                    'est_solar_gen': COLORS['solar_est'] if 'COLORS' in globals() else 'orange', 
-                    'est_wind_gen': COLORS['wind_est'] if 'COLORS' in globals() else 'green',
-                    'est_renew_total': COLORS['renew_total'] if 'COLORS' in globals() else 'cyan'
-                }
-                if smp_col: colors[smp_col] = COLORS['smp'] if 'COLORS' in globals() else 'red'
-                
-                actual_map = {
-                    'est_solar_gen': 'real_solar_gen',
-                    'est_wind_gen': 'real_wind_gen',
-                    'est_renew_total': 'real_renew_total',
-                    'est_net_demand': 'real_net_demand',
-                    'est_demand': 'real_demand',
-                }
+                colors = dict(EST_COLORS)
+                if smp_col:
+                    colors[smp_col] = COLORS['smp']
                            
                 for var in selected_vars:
-                    # --- 예측 트레이스 ---
-                    line_style = dict(
-                        color=colors.get(var, 'black'),
-                        width=2 if var != 'est_net_demand' else 4,
-                        dash='dot' if overlay_active else 'solid'
-                    )
-                    if var in ['est_solar_gen', 'est_wind_gen'] and not overlay_active:
-                        line_style['dash'] = 'dash'
+                    is_net = (var == 'est_net_demand')
+                    # --- 예측 트레이스 (항상 dash) ---
                     fig.add_trace(go.Scatter(
                         x=df.index, y=df[var],
                         mode='lines+markers',
                         name=plot_options[var],
-                        line=line_style,
+                        line=dict(color=colors.get(var, 'black'),
+                                  width=3 if is_net else 2,
+                                  dash='dash'),
                         hovertemplate='%{y:,.1f}',
                         legendgroup=var
                     ))
-                    
-                    # --- 실측 트레이스 ---
+
+                    # --- 실측 트레이스 (항상 solid, 오버레이 켜졌을 때만) ---
                     if overlay_active:
-                        actual_col = actual_map.get(var)
+                        actual_col = ACTUAL_MAP.get(var)
                         if actual_col and actual_col in selected_actual_cols and actual_col in df.columns:
-                            actual_name_map = {
-                                'real_solar_gen': '태양광 실측',
-                                'real_wind_gen': '풍력 실측',
-                                'real_renew_total': '재생E 실측 합계',
-                                'real_net_demand': '순부하 실측',
-                                'real_demand': '수요 실측',
-                            }                          
                             fig.add_trace(go.Scatter(
                                 x=df.index, y=df[actual_col],
                                 mode='lines+markers',
-                                name=actual_name_map.get(actual_col, actual_col),
-                                line=dict(
-                                    color=colors.get(var, 'black'),
-                                    width=3 if var != 'est_net_demand' else 5,
-                                    dash='solid'
-                                ),
+                                name=ACTUAL_LABEL_MAP.get(actual_col, actual_col),
+                                line=dict(color=colors.get(var, 'black'),
+                                          width=3 if actual_col == 'real_net_demand' else 2,
+                                          dash='solid'),
                                 marker=dict(size=6),
+                                opacity=0.85,
                                 hovertemplate='%{y:,.1f}',
                                 legendgroup=var
                             ))
@@ -974,39 +913,9 @@ elif menu == "Option C : 예측 결과 시각화":
                 
             st.caption("순부하(net_demand) : 전체 부하에서 신재생발전을 제외한 내연 발전기 및 연계선이 담당해야 할 총 전력부하로 전력거래소에서 판단하여 제어.")
         
-            # ── AI 예측 브리핑 섹션 
-            with st.expander("AI 예측 브리핑", expanded=True):
-                date_key = str(target_date)
-                
-                # 1. 파일에서 모든 브리핑 데이터를 로드 (세션에 없다면)
-                if 'lite_briefings_storage' not in st.session_state:
-                    st.session_state['lite_briefings_storage'] = load_briefings_from_file()
-
-                # 2. 현재 선택된 날짜에 해당하는 브리핑이 있는지 확인
-                saved_briefing = st.session_state['lite_briefings_storage'].get(date_key)
-
-                # 3. 브리핑 생성 버튼
-                if st.button("AI 브리핑 생성 / 갱신", key="lite_btn_ai_briefing"):
-                    with st.spinner("AI가 데이터를 분석하고 있습니다..."):
-                        briefing_text = generate_energy_narrative(
-                        df=df, 
-                        warn_low=warning_threshold,      # 또는 w_low
-                        warn_high=warning_threshold2,    # 또는 w_high  
-                        smp_threshold=smp_threshold
-                        )
-                        
-                        # 로컬 파일에 저장
-                        save_briefing_to_file(date_key, briefing_text)
-                        
-                        # 세션 상태 업데이트 (화면 즉시 반영용)
-                        st.session_state['lite_briefings_storage'][date_key] = briefing_text
-                        st.rerun()
-                
-                # 4. 브리핑 내용 표시
-                if saved_briefing:
-                    st.markdown(saved_briefing)
-                else:
-                    st.caption("위 버튼을 눌러 해당 날짜의 브리핑을 생성하세요. 생성된 내용은 로컬에 자동 저장됩니다.")
+            render_briefing_expander(df, warning_threshold, warning_threshold2, smp_threshold,
+                                     target_date, btn_key="full_btn_ai_briefing",
+                                     title="AI 예측 브리핑")
                     
 
             # ── 차트 아래: 경고 기준 설정 (expander, 기본 접힘) ──

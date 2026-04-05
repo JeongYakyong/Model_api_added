@@ -1,9 +1,65 @@
 import os
+import json
+import streamlit as st
 from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
 load_dotenv()
+
+
+# ==========================================
+# 브리핑 저장/로드
+# ==========================================
+BRIEFING_FILE = "briefing_storage.json"
+
+def load_briefings_from_file():
+    """로컬 JSON 파일에서 브리핑 데이터를 읽어옵니다."""
+    if os.path.exists(BRIEFING_FILE):
+        try:
+            with open(BRIEFING_FILE, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            return {}
+    return {}
+
+def save_briefing_to_file(date_key, text):
+    """특정 날짜의 브리핑을 로컬 JSON 파일에 저장합니다."""
+    data = load_briefings_from_file()
+    data[date_key] = text
+    try:
+        with open(BRIEFING_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=4)
+    except Exception as e:
+        print(f"File save error: {e}")
+
+def render_briefing_expander(df, warn_low, warn_high, smp_threshold, vis_date,
+                              btn_key="btn_ai_briefing", title="✨ AI 예측 브리핑"):
+    """AI 예측 브리핑 expander를 렌더링합니다."""
+    with st.expander(title, expanded=True):
+        date_key = str(vis_date)
+
+        if 'lite_briefings_storage' not in st.session_state:
+            st.session_state['lite_briefings_storage'] = load_briefings_from_file()
+
+        saved_briefing = st.session_state['lite_briefings_storage'].get(date_key)
+
+        if st.button("AI 브리핑 생성 / 갱신", key=btn_key):
+            with st.spinner("AI가 데이터를 분석하고 있습니다..."):
+                briefing_text = generate_energy_narrative(
+                    df=df,
+                    warn_low=warn_low,
+                    warn_high=warn_high,
+                    smp_threshold=smp_threshold
+                )
+                save_briefing_to_file(date_key, briefing_text)
+                st.session_state['lite_briefings_storage'][date_key] = briefing_text
+                st.rerun()
+
+        if saved_briefing:
+            st.markdown(saved_briefing)
+        else:
+            st.caption("위 버튼을 눌러 해당 날짜의 브리핑을 생성하세요. 생성된 내용은 로컬에 자동 저장됩니다.")
 
 
 def _time_block_summary(df, col):

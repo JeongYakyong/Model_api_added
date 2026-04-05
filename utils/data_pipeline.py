@@ -841,5 +841,70 @@ def run_model_prediction(target_date, db, assets):
     })
 
     updated_rows = db.update_forecast_predictions(pred_df)
-    
     return True, f"[Success] [{target_date}] 태양광/풍력 예측 완료 및 {updated_rows}행 저장 성공!", input_info
+
+
+# ============================================================================
+# UI 헬퍼: 오늘 예측 실행 (데이터 수집 → 모델 예측)
+# ============================================================================
+def run_today_prediction(db, assets):
+    """오늘 날짜 예측 실행. '바로 예측' 버튼에서 호출."""
+    import streamlit as st
+    from utils.chart_helpers import EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS
+
+    today = datetime.now().date()
+    EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS
+
+    # 과거 데이터 상태 간단 점검
+    past_df = db.get_historical(
+        f"{today - timedelta(days=14)} 00:00:00",
+        f"{today - timedelta(days=1)} 23:00:00"
+    )
+    past_hours   = len(past_df) if not past_df.empty else 0
+    past_missing = int(past_df.drop(columns=EXCLUDE, errors='ignore').isna().any(axis=1).sum()) if not past_df.empty else 0
+    past_gap     = max(336 - past_hours, 0)
+
+    if past_gap > 48:
+        st.session_state['_today_pred_error'] = (
+            "과거 데이터가 48시간 이상 부족합니다. "
+            "[🗂️ DB 수집 현황] 메뉴에서 수동 수집을 먼저 진행해 주세요."
+        )
+        st.rerun()
+        return
+
+    h_end_q   = (today - timedelta(days=1)).strftime("%Y-%m-%d")
+    h_start_q = (today - timedelta(days=3)).strftime("%Y-%m-%d")
+    tgt       = today.strftime("%Y-%m-%d")
+
+    with st.spinner("① KPX 실측 수집 중..."):
+        try:
+            if past_gap > 0 or past_missing > 0:
+                daily_historical_kpx(h_start_q, h_end_q)
+        except Exception:
+            pass
+    with st.spinner("② KMA 실측 수집 중..."):
+        try:
+            if past_gap > 0 or past_missing > 0:
+                daily_historical_kma(h_start_q, h_end_q)
+                daily_historical_kpx_smp(h_start_q, h_end_q)
+        except Exception:
+            pass
+    with st.spinner("③ KPX 예보 수집 중..."):
+        try:
+            daily_forecast_kpx(tgt, tgt)
+        except Exception:
+            pass
+    with st.spinner("④ KMA 예보 수집 중 (다소 오래 걸릴 수 있습니다)..."):
+        try:
+            daily_forecast_kma(tgt, tgt)
+        except Exception:
+            pass
+    with st.spinner("⑤ 모델 예측 실행 중..."):
+        ok, msg, _ = run_model_prediction(tgt, db, assets)
+
+    if ok:
+        st.session_state['lite_last_pred_date'] = today
+        st.session_state['_today_pred_success'] = msg
+    else:
+        st.session_state['_today_pred_error'] = f"예측 실패: {msg}"
+    st.rerun()

@@ -36,6 +36,9 @@ st.markdown("""
     .block-container {
         padding-top: 3.0rem !important; # 여유공간 관련
     }
+    div[data-testid="stDateInput"] input {
+        text-align: center;
+    }
 </style>
 """, unsafe_allow_html=True)
 
