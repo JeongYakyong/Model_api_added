@@ -41,10 +41,32 @@ class Patch_Weather_Attention(nn.Module):
         context = torch.bmm(attn_weights, transformer_output)
         return context.squeeze(1), attn_weights
 
+class Patch_Weather_Attention(nn.Module):
+    """
+    통합 Weather Attention (query_dim / key_dim 분리)
+    Solar: patch_len=24, pred_len=24 → query_dim == key_dim
+    """
+    def __init__(self, query_dim, key_dim, hidden_dim):
+        super().__init__()
+        self.W_Q = nn.Sequential(nn.Linear(query_dim, hidden_dim), nn.Tanh(), nn.Linear(hidden_dim, hidden_dim))
+        self.W_K = nn.Sequential(nn.Linear(key_dim, hidden_dim), nn.Tanh(), nn.Linear(hidden_dim, hidden_dim))
+        self.scale_factor = 1.0 / (hidden_dim ** 0.5)
+
+    def forward(self, future_weather_patch, past_weather_patches, transformer_output):
+        Q = self.W_Q(future_weather_patch).unsqueeze(1)
+        K = self.W_K(past_weather_patches)
+        score = torch.bmm(Q, K.transpose(1, 2)) * self.scale_factor
+        attn_weights = F.softmax(score, dim=-1)
+        context = torch.bmm(attn_weights, transformer_output)
+        return context.squeeze(1), attn_weights
 
 class PatchTST_Weather_Model(nn.Module):
-    def __init__(self, num_features, seq_len=336, pred_len=24, patch_len=24,
-                 stride=12, d_model=128, num_heads=4, num_layers=2,
+    def __init__(self, num_features,
+                 seq_len=336, pred_len=24, patch_len=24,
+                 stride=12,
+                 d_model=128,
+                 num_heads=4,
+                 num_layers=2,
                  d_ff=256, dropout=0.2):
         super(PatchTST_Weather_Model, self).__init__()
 
@@ -55,49 +77,48 @@ class PatchTST_Weather_Model(nn.Module):
         self.pred_len = pred_len
         self.num_patches = (self.seq_len - self.patch_len) // self.stride + 1
 
-        # Instance Normalization
-        self.inst_norm = InstanceNormalization(num_features)
+        
+        #self.inst_norm = InstanceNormalization(num_features)
 
-        # Patch Embedding
         patch_input_dim = self.patch_len * num_features
         self.patch_embedding = nn.Linear(patch_input_dim, self.d_model)
         self.pos_embedding = nn.Parameter(torch.randn(1, self.num_patches, self.d_model))
-        self.dropout = nn.Dropout(dropout)
+        self.dropout = nn.Dropout(DROPOUT)
 
-        # Transformer Encoder
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.d_model, nhead=num_heads, dim_feedforward=d_ff,
-            dropout=dropout, batch_first=True, norm_first=True
+            d_model=self.d_model, nhead=NUM_HEADS, dim_feedforward=D_FF,
+            dropout=DROPOUT, batch_first=True, norm_first=True
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_LAYERS)
 
-        # Weather Attention (query_dim / key_dim 분리)
         self.num_weather_feats = num_features - 1
         future_weather_flat_dim = self.pred_len * self.num_weather_feats
         weather_patch_dim = self.patch_len * self.num_weather_feats
 
+        # 통합 Attention: Solar는 24*15 == 24*15 (동일)
         self.weather_attn = Patch_Weather_Attention(
             query_dim=future_weather_flat_dim,
             key_dim=weather_patch_dim,
             hidden_dim=self.d_model
         )
 
-        # Regressor
         self.regressor = nn.Sequential(
             nn.Linear(self.d_model + future_weather_flat_dim, 256),
             nn.LeakyReLU(0.1),
-            nn.Dropout(dropout),
+            nn.Dropout(DROPOUT),
             nn.Linear(256, self.pred_len)
         )
 
-    def forward(self, batch, device='cpu'):
-        p_num = batch['past_numeric'].to(device)
-        p_y = batch['past_y'].to(device)
-        f_num = batch['future_numeric'].to(device)
+        self.weather_bypass = nn.Linear(future_weather_flat_dim, self.pred_len) # Weather Byapass 추가
+
+    def forward(self, batch):
+        p_num = batch['past_numeric'].to(DEVICE)
+        p_y = batch['past_y'].to(DEVICE)
+        f_num = batch['future_numeric'].to(DEVICE)
         B = p_num.shape[0]
 
         x_past = torch.cat([p_num, p_y], dim=-1)
-        x_past = self.inst_norm(x_past, mode='norm')
+        #x_past = self.inst_norm(x_past, mode='norm')
 
         x_patches = x_past.unfold(dimension=1, size=self.patch_len, step=self.stride)
         x_patches = x_patches.permute(0, 1, 3, 2).reshape(B, self.num_patches, -1)
@@ -113,7 +134,13 @@ class PatchTST_Weather_Model(nn.Module):
 
         context, _ = self.weather_attn(future_weather_flat, w_patches, enc_out)
 
+        #total_input = torch.cat([context, future_weather_flat], dim=1) ## 기존방식
+        #prediction = self.regressor(total_input)
+        # 변경: future_weather 직접 shortcut
+
         total_input = torch.cat([context, future_weather_flat], dim=1)
-        prediction = self.regressor(total_input)
+        main_pred = self.regressor(total_input)
+        weather_shortcut = self.weather_bypass(future_weather_flat)  # 간단한 Linear
+        prediction = main_pred + weather_shortcut
 
         return prediction
