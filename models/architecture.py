@@ -41,6 +41,11 @@ class Patch_Weather_Attention(nn.Module):
         context = torch.bmm(attn_weights, transformer_output)
         return context.squeeze(1), attn_weights
 
+
+# ==========================================
+# Weather Attetion Model
+# ==========================================
+
 class Patch_Weather_Attention(nn.Module):
     """
     통합 Weather Attention (query_dim / key_dim 분리)
@@ -77,19 +82,19 @@ class PatchTST_Weather_Model(nn.Module):
         self.pred_len = pred_len
         self.num_patches = (self.seq_len - self.patch_len) // self.stride + 1
 
-        
+
         #self.inst_norm = InstanceNormalization(num_features)
 
         patch_input_dim = self.patch_len * num_features
         self.patch_embedding = nn.Linear(patch_input_dim, self.d_model)
         self.pos_embedding = nn.Parameter(torch.randn(1, self.num_patches, self.d_model))
-        self.dropout = nn.Dropout(DROPOUT)
+        self.dropout = nn.Dropout(dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.d_model, nhead=NUM_HEADS, dim_feedforward=D_FF,
-            dropout=DROPOUT, batch_first=True, norm_first=True
+            d_model=self.d_model, nhead=num_heads, dim_feedforward=D_FF,
+            dropout=dropout, batch_first=True, norm_first=True
         )
-        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=NUM_LAYERS)
+        self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
 
         self.num_weather_feats = num_features - 1
         future_weather_flat_dim = self.pred_len * self.num_weather_feats
@@ -105,7 +110,7 @@ class PatchTST_Weather_Model(nn.Module):
         self.regressor = nn.Sequential(
             nn.Linear(self.d_model + future_weather_flat_dim, 256),
             nn.LeakyReLU(0.1),
-            nn.Dropout(DROPOUT),
+            nn.Dropout(dropout),
             nn.Linear(256, self.pred_len)
         )
 
