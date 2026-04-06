@@ -91,7 +91,7 @@ class PatchTST_Weather_Model(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
         encoder_layer = nn.TransformerEncoderLayer(
-            d_model=self.d_model, nhead=num_heads, dim_feedforward=D_FF,
+            d_model=self.d_model, nhead=num_heads, dim_feedforward=d_ff,
             dropout=dropout, batch_first=True, norm_first=True
         )
         self.transformer_encoder = nn.TransformerEncoder(encoder_layer, num_layers=num_layers)
