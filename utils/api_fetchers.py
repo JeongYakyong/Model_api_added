@@ -511,9 +511,22 @@ def fetch_kma_future_ncm(lat, lon, auth_key, base_date_kst, as_of_kst=None):
         df['midlow_cloud'] = df['low_cloud'] + df['mid_cloud'] * (1 - df['low_cloud'])
         df = df.drop(columns=['low_cloud', 'mid_cloud'])
 
+    #if 'rain_conv' in df.columns and 'rain_strat' in df.columns:
+    #    df['rainfall'] = (df['rain_conv'].fillna(0) + df['rain_strat'].fillna(0)).round(2)
+    #    df = df.drop(columns=['rain_conv', 'rain_strat'])
     if 'rain_conv' in df.columns and 'rain_strat' in df.columns:
-        df['rainfall'] = (df['rain_conv'].fillna(0) + df['rain_strat'].fillna(0)).round(2)
-        df = df.drop(columns=['rain_conv', 'rain_strat'])
+            # 1. 두 변수를 합쳐 누적 강수량(Accumulated Rainfall) 생성
+            df['acc_rainfall'] = (df['rain_conv'].fillna(0) + df['rain_strat'].fillna(0))
+            
+            # 2. 누적 강수량을 시간당 강수량으로 변환 (현재 시간 값 - 직전 시간 값)
+            # diff()를 사용하면 첫 번째 행은 NaN이 되므로 0으로 채움
+            df['rainfall'] = df['acc_rainfall'].diff().fillna(df['acc_rainfall']).round(2)
+            
+            # 3. 모델 초기화 등의 이유로 간혹 음수가 나올 수 있으므로 0 미만은 0으로 강제
+            df['rainfall'] = df['rainfall'].clip(lower=0)
+            
+            # 사용한 원본 컬럼 삭제
+            df = df.drop(columns=['rain_conv', 'rain_strat', 'acc_rainfall'])
 
     df['timestamp'] = df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S')
     df = df.set_index('timestamp')
