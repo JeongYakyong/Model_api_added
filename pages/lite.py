@@ -183,6 +183,7 @@ if lite_menu == "📈 예측 확인":
 
     # ── session_state 초기화 ──
     ss_defaults = {
+        'lite_vis_date': st.session_state.get('lite_last_pred_date', datetime.now().date()),
         'lite_vis_vars':    ['est_demand', 'est_net_demand', 'est_solar_gen', 'est_wind_gen'],
         'lite_vis_actual':  ['real_demand', 'real_solar_gen', 'real_wind_gen', 'real_net_demand'],
         'lite_show_actual': False,
@@ -217,8 +218,6 @@ if lite_menu == "📈 예측 확인":
     with col_date:
         vis_date = st.date_input(
             "조회 날짜",
-            st.session_state.get('lite_vis_date',
-                                 st.session_state.get('lite_last_pred_date', datetime.now().date())),
             key="lite_vis_date",
             label_visibility="collapsed"
         )
