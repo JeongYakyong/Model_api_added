@@ -117,9 +117,9 @@ class PatchTST_Weather_Model(nn.Module):
         self.weather_bypass = nn.Linear(future_weather_flat_dim, self.pred_len) # Weather Byapass 추가
 
     def forward(self, batch):
-        p_num = batch['past_numeric'].to(DEVICE)
-        p_y = batch['past_y'].to(DEVICE)
-        f_num = batch['future_numeric'].to(DEVICE)
+        p_num = batch['past_numeric'].to(device)
+        p_y = batch['past_y'].to(device)
+        f_num = batch['future_numeric'].to(device)
         B = p_num.shape[0]
 
         x_past = torch.cat([p_num, p_y], dim=-1)
