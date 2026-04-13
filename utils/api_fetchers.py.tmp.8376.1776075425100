@@ -67,57 +67,6 @@ def fetch_kpx_past(start_date, end_date):
         logger.error(f"[KPX Past] 실패: {e}")
         return pd.DataFrame()
 
-
-@st.cache_data(ttl=1800, show_spinner=False)
-def fetch_kpx_past_15min(start_date, end_date):
-    """
-    KPX 실측 발전량 15분 단위 데이터 (시각화 전용, 30분 캐시).
-    fetch_kpx_past와 동일한 API를 호출하되 15분 간격(00·15·30·45분)만 유지.
-    DB 저장·모델 입력에는 fetch_kpx_past를 사용.
-    """
-    url = "https://openapi.kpx.or.kr/downloadChejuSukubCSV.do"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Referer": "https://openapi.kpx.or.kr/chejusukub.do"
-    }
-    payload = {'startDate': start_date, 'endDate': end_date}
-
-    try:
-        resp = requests.post(url, data=payload, headers=headers, timeout=30)
-        resp.raise_for_status()
-
-        df = pd.read_csv(io.StringIO(resp.text))
-        df.columns = df.columns.str.strip()
-
-        # 15분 단위 필터링 (00·15·30·45분)
-        df['기준일시'] = df['기준일시'].astype(str)
-        df = df[df['기준일시'].str[-4:].isin(['0000', '1500', '3000', '4500'])].copy()
-
-        df['timestamp'] = pd.to_datetime(
-            df['기준일시'], format='%Y%m%d%H%M%S'
-        )
-
-        df = df.rename(columns={
-            '공급능력(MW)': 'supply_cap',
-            '현재수요(MW)': 'real_demand',
-            '신재생총합(MW)': 'real_renew_gen',
-            '신재생태양광(MW)': 'real_solar_gen',
-            '신재생풍력(MW)': 'real_wind_gen'
-        })
-
-        result = df.set_index('timestamp')[
-            ['supply_cap', 'real_demand', 'real_renew_gen',
-             'real_solar_gen', 'real_wind_gen']
-        ].apply(pd.to_numeric, errors='coerce')
-
-        logger.info(f"[KPX 15min] {len(result)}행 수집")
-        return result
-
-    except Exception as e:
-        logger.error(f"[KPX 15min] 실패: {e}")
-        return pd.DataFrame()
-
-
 def fetch_kpx_future(target_date, service_key):
     url = 'https://apis.data.go.kr/B552115/SmpWithForecastDemand/getSmpWithForecastDemand'
     params = {

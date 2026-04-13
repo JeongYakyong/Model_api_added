@@ -209,3 +209,6 @@ __marimo__/
 # jeju energy DB
 database/jeju_energy.db
 database/*.db
+
+# Claude Code
+CLAUDE.md

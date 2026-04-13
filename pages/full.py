@@ -24,6 +24,7 @@ from utils.data_pipeline import (
     run_model_prediction, prepare_model_input,
     daily_forecast_kpx, daily_forecast_kma
 )
+from utils.api_fetchers import fetch_kpx_past_15min
 from models.architecture import PatchTST_Weather_Model
 from utils.chart_helpers import (
     EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, COLORS,
@@ -35,6 +36,7 @@ from utils.gemini import (
     generate_energy_narrative,
     load_briefings_from_file, save_briefing_to_file, render_briefing_expander,
 )
+from utils.log_utils import st_log_status, render_log_viewer, render_log_sidebar_toggle
 
 
 
@@ -65,6 +67,9 @@ menu = st.sidebar.radio("메뉴 선택:", [
     "Option E : 데이터 분석 (EDA)",
     "Option F : 시스템 안내"
 ], key="main_menu")
+
+st.sidebar.markdown("---")
+render_log_sidebar_toggle()
 
 # ==========================================
 # Option A : DB 관리
@@ -196,14 +201,13 @@ if menu == "Option A : DB 관리":
                 st.warning("⚠️ 현재시간 이후의 데이터는 정상적으로 수집되지 않을 수 있습니다.")
             
             if st.button("실측 데이터 수집", width="stretch", disabled=invalid_date):
-                with st.spinner("모든 실측 데이터를 수집하고 있습니다..."):
-                    try:
+                try:
+                    with st_log_status("실측 데이터 수집 중...", done_label="실측 데이터 수집 완료"):
                         daily_historical_kpx(hist_start.strftime("%Y-%m-%d"), hist_end.strftime("%Y-%m-%d"))
                         daily_historical_kma(hist_start.strftime("%Y-%m-%d"), hist_end.strftime("%Y-%m-%d"))
                         daily_historical_kpx_smp(hist_start.strftime("%Y-%m-%d"), hist_end.strftime("%Y-%m-%d"))
-                        st.success("실측 데이터 수집 완료!")
-                    except Exception as e:
-                        st.error(f"API 호출 실패: {e}")
+                except Exception as e:
+                    st.error(f"API 호출 실패: {e}")
             
             with st.expander("🛠️ 개별 API 수집"):
                 st.caption("필요한 특정 데이터만 개별적으로 수집할 수 있습니다.")
@@ -212,28 +216,25 @@ if menu == "Option A : DB 관리":
                 h_end_str = hist_end.strftime("%Y-%m-%d")
                 
                 if st.button("KPX 발전량 수집", key="btn_kpx_hist", disabled=invalid_date):
-                    with st.spinner("KPX 발전량 데이터를 수집 중입니다..."):
-                        try:
-                            daily_historical_kpx(h_start_str, h_end_str) 
-                            st.success("KPX 발전량 데이터 수집 완료!")
-                        except Exception as e:
-                            st.error(f"KPX 발전량 API 호출 실패: {e}")
-                        
+                    try:
+                        with st_log_status("KPX 발전량 수집 중...", done_label="KPX 발전량 수집 완료"):
+                            daily_historical_kpx(h_start_str, h_end_str)
+                    except Exception as e:
+                        st.error(f"KPX 발전량 API 호출 실패: {e}")
+
                 if st.button("KPX SMP 수집", key="btn_kpx_smp", disabled=invalid_date):
-                    with st.spinner("KPX SMP 데이터를 수집 중입니다..."):
-                        try:
+                    try:
+                        with st_log_status("KPX SMP 수집 중...", done_label="KPX SMP 수집 완료"):
                             daily_historical_kpx_smp(h_start_str, h_end_str)
-                            st.success("KPX SMP 데이터 수집 완료!")
-                        except Exception as e:
-                            st.error(f"KPX SMP API 호출 실패: {e}")
-                        
+                    except Exception as e:
+                        st.error(f"KPX SMP API 호출 실패: {e}")
+
                 if st.button("KMA 기상 데이터 수집", key="btn_kma_hist", disabled=invalid_date):
-                    with st.spinner("KMA 기상 데이터를 수집 중입니다..."):
-                        try:
+                    try:
+                        with st_log_status("KMA 기상 수집 중...", done_label="KMA 기상 수집 완료"):
                             daily_historical_kma(h_start_str, h_end_str)
-                            st.success("KMA 기상 데이터 수집 완료!")
-                        except Exception as e:
-                            st.error(f"KMA 기상 API 호출 실패: {e}")
+                    except Exception as e:
+                        st.error(f"KMA 기상 API 호출 실패: {e}")
                         
         with col2:
             st.write("### 🌤️ Forecast 데이터 (예보)")
@@ -259,12 +260,11 @@ if menu == "Option A : DB 관리":
                 invalid_fore_date = True
                 
             if st.button("Forecast 데이터 수집", width="stretch", disabled=invalid_fore_date):
-                with st.spinner("모든 예보 데이터를 수집하고 있습니다..."):
-                    try:
+                try:
+                    with st_log_status("예보 데이터 수집 중...", done_label="예보 데이터 수집 완료"):
                         daily_forecast_and_predict(fore_start.strftime("%Y-%m-%d"), fore_end.strftime("%Y-%m-%d"))
-                        st.success("Forecast 데이터 수집 완료!")
-                    except Exception as e:
-                        st.error(f"Forecast API 호출 실패: {e}")
+                except Exception as e:
+                    st.error(f"Forecast API 호출 실패: {e}")
             
             with st.expander("🛠️ 개별 API 수집"):
                 st.caption("필요한 특정 예보 데이터만 개별적으로 수집할 수 있습니다.")
@@ -273,20 +273,18 @@ if menu == "Option A : DB 관리":
                 f_end_str = fore_end.strftime("%Y-%m-%d")
                 
                 if st.button("KPX 발전량 Forecast 수집", key="btn_kpx_fore_ind", disabled=invalid_fore_date):
-                    with st.spinner("KPX Forecast 데이터를 수집 중입니다..."):
-                        try:
+                    try:
+                        with st_log_status("KPX Forecast 수집 중...", done_label="KPX Forecast 수집 완료"):
                             daily_forecast_kpx(f_start_str, f_end_str)
-                            st.success("KPX Forecast 수집 완료!")
-                        except Exception as e:
-                            st.error(f"KPX Forecast API 호출 실패: {e}")
-                        
+                    except Exception as e:
+                        st.error(f"KPX Forecast API 호출 실패: {e}")
+
                 if st.button("KMA 기상 Forecast 수집", key="btn_kma_fore_ind", disabled=invalid_fore_date):
-                    with st.spinner("KMA 기상 Forecast 데이터를 수집 중입니다..."):
-                        try:
+                    try:
+                        with st_log_status("KMA Forecast 수집 중...", done_label="KMA Forecast 수집 완료"):
                             daily_forecast_kma(f_start_str, f_end_str)
-                            st.success("KMA Forecast 수집 완료!")
-                        except Exception as e:
-                            st.error(f"KMA Forecast API 호출 실패: {e}")
+                    except Exception as e:
+                        st.error(f"KMA Forecast API 호출 실패: {e}")
         st.markdown("---")
         st.info("💡 호출 시점 기준 최신 예보를 자동 반영합니다.")
         
@@ -352,7 +350,7 @@ if menu == "Option A : DB 관리":
             st.dataframe(missing_preview, width="stretch", hide_index=True)
             
             if st.button("DB에 적재하기", type="primary"):
-                with st.spinner("데이터를 분석하고 DB에 기록하는 중입니다..."):
+                with st_log_status("데이터를 DB에 기록하는 중...", done_label="DB 적재 완료"):
                     try:
                         df = preview_df.copy()
                         
@@ -498,14 +496,13 @@ elif menu == "Option B : 발전량 예측":
         with st.expander("🔄 예보 데이터 최신화", expanded=False):
             st.caption("KMA 기상 예보는 6시간 주기로 갱신됩니다. (00시, 06시, 12시, 18시)최신 사이클을 반영하려면 아래 버튼을 눌러주세요.")
             if st.button("🌤️ KMA 예보 최신화", use_container_width=True):
-                with st.spinner("최신 KMA 예보를 수집하고 있습니다..."):
-                    try:
+                try:
+                    with st_log_status("KMA 예보 최신화 중...", done_label="KMA 예보 최신화 완료"):
                         target_str = target_date.strftime("%Y-%m-%d")
                         daily_forecast_kma(target_str, target_str)
-                        st.success(f"{target_date} KMA 예보 최신화 완료!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"KMA 예보 수집 실패: {e}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"KMA 예보 수집 실패: {e}")
 
     # 문제가 있을 때 구체적 안내 + 빠른 수집
     if not past_ok or not future_ok:
@@ -549,25 +546,19 @@ elif menu == "Option B : 발전량 예측":
                     fetch_desc.append(f"예보 {future_gap}시간 부족 ({target_str})")
             
             if st.button("📡 부족 데이터 빠른 수집", type="primary", width='stretch'):
-                with st.spinner("부족한 데이터를 수집하고 있습니다..."):
-                    try:
-                        collected = []
-                        
+                try:
+                    with st_log_status("부족 데이터 수집 중...", done_label="수집 완료"):
                         if needs_past_fetch:
                             daily_historical_kpx(hist_start, hist_end)
                             daily_historical_kma(hist_start, hist_end)
                             daily_historical_kpx_smp(hist_start, hist_end)
-                            collected.append(f"실측 {hist_start}~{hist_end}")
-                        
+
                         if needs_future_fetch:
                             daily_forecast_kpx(target_str, target_str)
                             daily_forecast_kma(target_str, target_str)
-                            collected.append(f"예보 {target_str}")
-                        
-                        st.success(f"수집 완료! ({', '.join(collected)})")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"수집 실패: {e}")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"수집 실패: {e}")
             
             st.caption(f"💡 {' / '.join(fetch_desc)}")
         
@@ -623,7 +614,7 @@ elif menu == "Option B : 발전량 예측":
     st.caption("**2일 이상 미래 예측 시** 이전 날짜의 예측이 먼저 완료되어야 함.")
     
     if st.button("🚀 예측 실행", type="primary", width="stretch"):
-        with st.spinner(f"{target_date} 예측을 진행 중입니다... (데이터 검증 및 모델 추론)"):
+        with st_log_status(f"{target_date} 예측 중...", done_label=f"{target_date} 예측 완료"):
             success, message, input_info = run_model_prediction(
                 target_date.strftime('%Y-%m-%d'), db, assets
             )
@@ -714,23 +705,26 @@ elif menu == "Option C : 예측 결과 시각화":
         
         smp_col = 'smp_jeju' if 'smp_jeju' in df.columns else ('est_smp_jeju' if 'est_smp_jeju' in df.columns else None)
         
-        # --- 실측 데이터 병합 시도 (historical 테이블에서 직접 조회) ---
-        hist_df = db.get_historical(start_str, f"{target_date} 23:59:59")
+        # --- 실측 데이터 로드 (15분 캐시 API → DB 폴백) ---
         has_actual = False
-        
-        if not hist_df.empty:
-            if not pd.api.types.is_datetime64_any_dtype(hist_df.index):
-                hist_df.index = pd.to_datetime(hist_df.index)
-            
-            actual_cols = ['real_solar_gen', 'real_wind_gen', 'real_demand', 'real_renew_gen']
-            for col in actual_cols:
-                if col in hist_df.columns:
-                    df[col] = hist_df[col].reindex(df.index)
-            
-            if 'real_solar_gen' in df.columns and df['real_solar_gen'].notna().any():
+        actual_df = pd.DataFrame()
+        kpx_15 = fetch_kpx_past_15min(
+            target_date.strftime("%Y-%m-%d"),
+            target_date.strftime("%Y-%m-%d"),
+        )
+        if not kpx_15.empty:
+            actual_df = kpx_15
+        else:
+            actual_df = db.get_historical(start_str, f"{target_date} 23:59:59")
+
+        if not actual_df.empty:
+            if not pd.api.types.is_datetime64_any_dtype(actual_df.index):
+                actual_df.index = pd.to_datetime(actual_df.index)
+            if 'real_solar_gen' in actual_df.columns and actual_df['real_solar_gen'].notna().any():
                 has_actual = True
-                df['real_renew_total'] = df['real_solar_gen'] + df['real_wind_gen']
-                df['real_net_demand'] = df['real_demand'] - df['real_renew_total']
+                actual_df['real_renew_total'] = actual_df.get('real_solar_gen', 0) + actual_df.get('real_wind_gen', 0)
+                if 'real_demand' in actual_df.columns:
+                    actual_df['real_net_demand'] = actual_df['real_demand'] - actual_df['real_renew_total']
         
         # ── session_state 초기화 ──
         if 'vis_selected_vars' not in st.session_state:
@@ -759,7 +753,7 @@ elif menu == "Option C : 예측 결과 시각화":
             plot_options[smp_col] = f'제주 SMP 가격 ({smp_col})'
 
         available_actual = {col: label for col, label in ACTUAL_LABEL_MAP.items()
-                            if col in df.columns and df[col].notna().any()} if has_actual else {}
+                            if col in actual_df.columns and actual_df[col].notna().any()} if has_actual else {}
         
         @st.dialog("📊 표시 항목 설정")
         def select_plot_items():
@@ -844,9 +838,9 @@ elif menu == "Option C : 예측 결과 시각화":
                     # --- 실측 트레이스 (항상 solid, 오버레이 켜졌을 때만) ---
                     if overlay_active:
                         actual_col = ACTUAL_MAP.get(var)
-                        if actual_col and actual_col in selected_actual_cols and actual_col in df.columns:
+                        if actual_col and actual_col in selected_actual_cols and actual_col in actual_df.columns:
                             fig.add_trace(go.Scatter(
-                                x=df.index, y=df[actual_col],
+                                x=actual_df.index, y=actual_df[actual_col],
                                 mode='lines+markers',
                                 name=ACTUAL_LABEL_MAP.get(actual_col, actual_col),
                                 line=dict(color=colors.get(var, 'black'),
@@ -908,9 +902,15 @@ elif menu == "Option C : 예측 결과 시각화":
                 )
                 
                 st.plotly_chart(fig, width="stretch")
-            # ── 차트 아래: 실측 오버레이 체크박스 ──
+            # ── 차트 아래: 실측 오버레이 체크박스 + 새로고침 ──
             if has_actual:
-                st.checkbox("📊 실측 데이터 오버레이", key='vis_show_actual')
+                ov_col1, ov_col2 = st.columns([6, 1])
+                with ov_col1:
+                    st.checkbox("📊 실측 데이터 오버레이", key='vis_show_actual')
+                with ov_col2:
+                    if st.button("🔄", key="full_btn_refresh_actual", help="실측 데이터 새로고침"):
+                        fetch_kpx_past_15min.clear()
+                        st.rerun()
             else:
                 st.info("ℹ️ 실측 데이터가 없습니다. 새로고침 혹은 API 데이터 호출이 필요합니다.")
                 
@@ -961,12 +961,6 @@ elif menu == "Option C : 예측 결과 시각화":
         with tab_table:
             st.subheader(f"{target_date} 상세 데이터")
             display_cols = ['est_demand', 'est_solar_gen', 'est_wind_gen', 'est_renew_total', 'est_net_demand']
-            
-            if has_actual:
-                actual_display = ['real_solar_gen', 'real_wind_gen', 'real_renew_total', 'real_net_demand']
-                if 'real_demand' in df.columns:
-                    actual_display.insert(0, 'real_demand')
-                display_cols += [c for c in actual_display if c in df.columns]
             
             if smp_col: display_cols.append(smp_col)
             display_cols = [c for c in display_cols if c in df.columns]
@@ -1702,3 +1696,9 @@ elif menu == "Option E : 데이터 분석 (EDA)" :
 # ==========================================
 elif menu == "Option F : 시스템 안내":
     render_system_info()
+
+# ==========================================
+# 페이지 하단 로그 뷰어
+# ==========================================
+st.markdown("---")
+render_log_viewer()

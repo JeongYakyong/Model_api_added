@@ -2,9 +2,13 @@ import pandas as pd
 import numpy as np
 import sqlite3
 import os
+import logging
 from datetime import datetime, timedelta
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
+
+logger = logging.getLogger('jejucr.db')
+logger.setLevel(logging.DEBUG)
 
 class JejuEnergyDB:
     """제주 에너지 데이터베이스 최종 버전"""
@@ -20,7 +24,7 @@ class JejuEnergyDB:
             
         self.conn = sqlite3.connect(db_path, check_same_thread=False)
         self._init_tables()
-        print(f"DB 연결: {db_path}")
+        logger.info(f"DB 연결: {db_path}")
     
     def _init_tables(self):
         """테이블 초기화"""
@@ -112,7 +116,7 @@ class JejuEnergyDB:
                 pass
 
         self.conn.commit()
-        print("테이블 초기화 완료")
+        logger.info("테이블 초기화 완료")
 
     
     # ==========================================
@@ -123,12 +127,12 @@ class JejuEnergyDB:
         실측 데이터 저장 (진짜 UPSERT 적용)
         """
         if df.empty:
-            print("빈 데이터프레임")
+            logger.debug("빈 데이터프레임")
             return 0
-        
+
         if df.index.name == 'timestamp':
             df = df.reset_index()
-        
+
         df['updated_at'] = datetime.now().isoformat()
         
         # 전체 컬럼 (순서대로)
@@ -179,7 +183,7 @@ class JejuEnergyDB:
             cursor.execute(query, safe_row_values)
         
         self.conn.commit()
-        print(f"실측 데이터 {len(df_to_save):,}행 저장")
+        logger.info(f"실측 데이터 {len(df_to_save):,}행 저장")
         return len(df_to_save)
 
     def get_historical(self, start_date=None, end_date=None, columns=None):
@@ -237,7 +241,7 @@ class JejuEnergyDB:
         df = pd.read_sql(query, self.conn)
         
         if df.empty:
-            print("Capacity 데이터 없음 - 기본값 사용")
+            logger.warning("Capacity 데이터 없음 - 기본값 사용")
             return {'Solar_Capacity_Est': None, 'Wind_Capacity_Est': None}
         
         return df.iloc[0].to_dict()
@@ -250,12 +254,12 @@ class JejuEnergyDB:
         예보 데이터 저장 (진짜 UPSERT 적용)
         """
         if df.empty:
-            print("빈 데이터프레임")
+            logger.debug("빈 데이터프레임")
             return 0
-        
+
         if df.index.name == 'timestamp':
             df = df.reset_index()
-        
+
         if auto_add_capacity:
             if 'Solar_Capacity_Est' not in df.columns or 'Wind_Capacity_Est' not in df.columns:
                 latest_cap = self.get_latest_capacity()
@@ -320,7 +324,7 @@ class JejuEnergyDB:
             cursor.execute(query, safe_row_values)
         
         self.conn.commit()
-        print(f"예보 데이터 {len(df_to_save):,}행 저장 (예보시각: {forecast_time[:16]})")
+        logger.info(f"예보 데이터 {len(df_to_save):,}행 저장 (예보시각: {forecast_time[:16]})")
         return len(df_to_save)
  
     def update_forecast_predictions(self, df_predictions):
@@ -332,7 +336,7 @@ class JejuEnergyDB:
                 필수 컬럼: est_Solar_Utilization, est_Wind_Utilization
         """
         if df_predictions.empty:
-            print("빈 예측 결과")
+            logger.debug("빈 예측 결과")
             return 0
         
         if df_predictions.index.name == 'timestamp':
@@ -355,7 +359,7 @@ class JejuEnergyDB:
             updated += cursor.rowcount
         
         self.conn.commit()
-        print(f"예측 결과 {updated}행 업데이트")
+        logger.info(f"예측 결과 {updated}행 업데이트")
         return updated
 
    
@@ -449,7 +453,7 @@ class JejuEnergyDB:
         deleted = cursor.rowcount
         
         self.conn.commit()
-        print(f"오래된 예보 {deleted}행 삭제 (기준: {cutoff} 이전)")
+        logger.info(f"오래된 예보 {deleted}행 삭제 (기준: {cutoff} 이전)")
         return deleted
     
     # ==========================================
@@ -460,22 +464,22 @@ class JejuEnergyDB:
         """데이터베이스 현황 요약"""
         cursor = self.conn.cursor()
         
-        print("\n" + "="*60)
-        print("데이터베이스 현황")
-        print("="*60)
-        
+        logger.info("=" * 60)
+        logger.info("데이터베이스 현황")
+        logger.info("=" * 60)
+
         # Historical
         cursor.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM historical_data")
         count, min_ts, max_ts = cursor.fetchone()
-        
-        print(f"\n[실측 데이터 - historical_data]")
-        print(f"  데이터 개수: {count:,}행")
+
+        logger.info(f"[실측 데이터 - historical_data]")
+        logger.info(f"  데이터 개수: {count:,}행")
         if min_ts and max_ts:
-            print(f"  기간: {min_ts} ~ {max_ts}")
-            
+            logger.info(f"  기간: {min_ts} ~ {max_ts}")
+
             # Capacity 통계
             cursor.execute("""
-                SELECT 
+                SELECT
                     AVG(Solar_Capacity_Est), AVG(Wind_Capacity_Est),
                     MAX(Solar_Capacity_Est), MAX(Wind_Capacity_Est)
                 FROM historical_data
@@ -483,28 +487,28 @@ class JejuEnergyDB:
             """)
             solar_avg, wind_avg, solar_max, wind_max = cursor.fetchone()
             if solar_avg:
-                print(f"  Solar Capacity: 평균 {solar_avg:.1f} MW, 최대 {solar_max:.1f} MW")
-                print(f"  Wind Capacity: 평균 {wind_avg:.1f} MW, 최대 {wind_max:.1f} MW")
-        
+                logger.info(f"  Solar Capacity: 평균 {solar_avg:.1f} MW, 최대 {solar_max:.1f} MW")
+                logger.info(f"  Wind Capacity: 평균 {wind_avg:.1f} MW, 최대 {wind_max:.1f} MW")
+
         # Forecast
         cursor.execute("SELECT COUNT(*), MIN(timestamp), MAX(timestamp) FROM forecast_data")
         count, min_ts, max_ts = cursor.fetchone()
-        
-        print(f"\n[예보 데이터 - forecast_data]")
-        print(f"  데이터 개수: {count:,}행")
+
+        logger.info(f"[예보 데이터 - forecast_data]")
+        logger.info(f"  데이터 개수: {count:,}행")
         if min_ts and max_ts:
-            print(f"  기간: {min_ts} ~ {max_ts}")
-            
+            logger.info(f"  기간: {min_ts} ~ {max_ts}")
+
             # 예측 완료 여부
             cursor.execute("""
-                SELECT COUNT(*) 
-                FROM forecast_data 
+                SELECT COUNT(*)
+                FROM forecast_data
                 WHERE est_Solar_Utilization IS NOT NULL
             """)
             predicted = cursor.fetchone()[0]
-            print(f"  예측 완료: {predicted}/{count}행")
-        
-        print("="*60 + "\n")
+            logger.info(f"  예측 완료: {predicted}/{count}행")
+
+        logger.info("=" * 60)
     
     def cleanup_old_data(self, keep_years=5):
         """
@@ -520,10 +524,10 @@ class JejuEnergyDB:
         deleted = cursor.rowcount
         
         self.conn.commit()
-        print(f"오래된 실측 데이터 {deleted:,}행 삭제 (기준: {cutoff} 이전)")
+        logger.info(f"오래된 실측 데이터 {deleted:,}행 삭제 (기준: {cutoff} 이전)")
         return deleted
     
     def close(self):
         """DB 연결 종료"""
         self.conn.close()
-        print("dB 연결 종료")
+        logger.info("DB 연결 종료")
