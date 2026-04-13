@@ -89,6 +89,32 @@ def st_log_status(label="실행 중...", done_label="완료"):
             lgr.removeHandler(handler)
 
 
+@contextmanager
+def log_capture():
+    """
+    Lightweight context manager: captures logs to the buffer only.
+    No spinner, no UI — use with your own st.spinner() per step.
+
+    Usage:
+        with log_capture():
+            with st.spinner("① KPX 수집 중..."):
+                daily_historical_kpx(...)
+            with st.spinner("② KMA 수집 중..."):
+                daily_historical_kma(...)
+    """
+    handler = _BufferHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
+    for lgr in loggers:
+        lgr.addHandler(handler)
+    try:
+        yield
+    finally:
+        for lgr in loggers:
+            lgr.removeHandler(handler)
+
+
 # ============================================================================
 # Mini-terminal log viewer (sidebar expander — no rerun on toggle)
 # ============================================================================

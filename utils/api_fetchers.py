@@ -55,11 +55,20 @@ def fetch_kpx_past(start_date, end_date):
         })
         
         # 필요한 컬럼만 선택 및 숫자 변환
-        result = df.set_index('timestamp')[
-            ['supply_cap', 'real_demand', 'real_renew_gen', 
-             'real_solar_gen', 'real_wind_gen']
-        ].apply(pd.to_numeric, errors='coerce')
-        
+        power_cols = ['supply_cap', 'real_demand', 'real_renew_gen',
+                      'real_solar_gen', 'real_wind_gen']
+        result = df.set_index('timestamp')[power_cols].apply(pd.to_numeric, errors='coerce')
+
+        # demand=0 은 계측 오류 (실제 수요가 0이 될 수 없음)
+        # → 해당 행 전체를 NaN 처리 후 양방향 보간 (최대 3개 연속)
+        zero_mask = result['real_demand'] == 0
+        if zero_mask.any():
+            result.loc[zero_mask, power_cols] = np.nan
+            logger.warning(f"[KPX Past] demand=0 오류 {zero_mask.sum()}행 → NaN 양방향 보간")
+        result.index = pd.to_datetime(result.index)
+        result = result.interpolate(method='time', limit=3, limit_direction='both')
+        result.index = result.index.strftime('%Y-%m-%d %H:%M:%S')
+
         logger.info(f"[KPX Past] {len(result)}행 수집")
         return result
         
@@ -105,10 +114,16 @@ def fetch_kpx_past_15min(start_date, end_date):
             '신재생풍력(MW)': 'real_wind_gen'
         })
 
-        result = df.set_index('timestamp')[
-            ['supply_cap', 'real_demand', 'real_renew_gen',
-             'real_solar_gen', 'real_wind_gen']
-        ].apply(pd.to_numeric, errors='coerce')
+        power_cols = ['supply_cap', 'real_demand', 'real_renew_gen',
+                      'real_solar_gen', 'real_wind_gen']
+        result = df.set_index('timestamp')[power_cols].apply(pd.to_numeric, errors='coerce')
+
+        # demand=0 오류 → NaN 양방향 보간
+        zero_mask = result['real_demand'] == 0
+        if zero_mask.any():
+            result.loc[zero_mask, power_cols] = np.nan
+            logger.warning(f"[KPX 15min] demand=0 오류 {zero_mask.sum()}행 → NaN 양방향 보간")
+        result = result.interpolate(method='time', limit=3, limit_direction='both')
 
         logger.info(f"[KPX 15min] {len(result)}행 수집")
         return result

@@ -854,7 +854,7 @@ def run_today_prediction(db, assets):
     """오늘 날짜 예측 실행. '바로 예측' 버튼에서 호출."""
     import streamlit as st
     from utils.chart_helpers import EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS
-    from utils.log_utils import st_log_status
+    from utils.log_utils import log_capture
 
     today = datetime.now().date()
     EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS
@@ -880,27 +880,32 @@ def run_today_prediction(db, assets):
     h_start_q = (today - timedelta(days=3)).strftime("%Y-%m-%d")
     tgt       = today.strftime("%Y-%m-%d")
 
-    with st_log_status("바로 예측 실행 중...", done_label="바로 예측 완료"):
-        try:
-            if past_gap > 0 or past_missing > 0:
-                daily_historical_kpx(h_start_q, h_end_q)
-        except Exception:
-            pass
-        try:
-            if past_gap > 0 or past_missing > 0:
-                daily_historical_kma(h_start_q, h_end_q)
-                daily_historical_kpx_smp(h_start_q, h_end_q)
-        except Exception:
-            pass
-        try:
-            daily_forecast_kpx(tgt, tgt)
-        except Exception:
-            pass
-        try:
-            daily_forecast_kma(tgt, tgt)
-        except Exception:
-            pass
-        ok, msg, _ = run_model_prediction(tgt, db, assets)
+    with log_capture():
+        with st.spinner("① KPX 실측 수집 중..."):
+            try:
+                if past_gap > 0 or past_missing > 0:
+                    daily_historical_kpx(h_start_q, h_end_q)
+            except Exception:
+                pass
+        with st.spinner("② KMA 실측 수집 중..."):
+            try:
+                if past_gap > 0 or past_missing > 0:
+                    daily_historical_kma(h_start_q, h_end_q)
+                    daily_historical_kpx_smp(h_start_q, h_end_q)
+            except Exception:
+                pass
+        with st.spinner("③ KPX 예보 수집 중..."):
+            try:
+                daily_forecast_kpx(tgt, tgt)
+            except Exception:
+                pass
+        with st.spinner("④ KMA 예보 수집 중 (다소 오래 걸릴 수 있습니다)..."):
+            try:
+                daily_forecast_kma(tgt, tgt)
+            except Exception:
+                pass
+        with st.spinner("⑤ 모델 예측 실행 중..."):
+            ok, msg, _ = run_model_prediction(tgt, db, assets)
 
     if ok:
         st.session_state['lite_last_pred_date'] = today
