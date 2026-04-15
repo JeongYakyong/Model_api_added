@@ -813,19 +813,21 @@ def fetch_kma_future_ncm_wind(auth_key, base_date_kst, as_of_kst=None):
 
     KST = timezone(timedelta(hours=9))
 
-    # ── 1) 권역별 수집 ──
-    zone_dfs = []
-    for zone in WIND_ZONES:
+    # ── 1) 권역별 수집 (병렬) ──
+    def _fetch_zone(zone):
         logger.info(f"[Wind-{zone['name']}] ({zone['lat']}, {zone['lon']}) 수집 중...")
         df_zone = fetch_kma_future_ncm_north_single(
             zone["lat"], zone["lon"], auth_key, base_date_kst, as_of_kst=as_of_kst
         )
         if df_zone.empty:
             logger.warning(f"[Wind-{zone['name']}] 데이터 없음 — 스킵")
-            continue
-        
+            return None
         weight = zone["capacity_mw"] / TOTAL_WIND_CAPACITY
-        zone_dfs.append((zone["name"], weight, df_zone))
+        return (zone["name"], weight, df_zone)
+
+    with ThreadPoolExecutor(max_workers=len(WIND_ZONES)) as executor:
+        results = list(executor.map(_fetch_zone, WIND_ZONES))
+    zone_dfs = [r for r in results if r is not None]
 
     if not zone_dfs:
         logger.error("[Wind] 모든 권역 수집 실패")

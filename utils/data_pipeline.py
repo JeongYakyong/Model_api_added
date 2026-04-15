@@ -15,6 +15,7 @@ import numpy as np
 import torch
 import time
 import logging
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 import os
 from dotenv import load_dotenv
@@ -356,70 +357,47 @@ def daily_forecast_and_predict(start_date, end_date):
             db.save_forecast(kpx_data, auto_add_capacity=True)
             logger.info(f"[{target_date}] KPX 저장 완료")
             
-        # 2. KMA 수집 (과거/오늘/미래 분기)
+        # 2. KMA 수집 (과거/오늘/미래 분기) — 남쪽+북쪽 동시 수집
         try:
             if target_d < today:
                 # ── 과거: 사이클 시간순 소급 ──
                 logger.info(f"[{target_date}] KMA 과거 소급 수집 ({len(CYCLE_AVAILABLE_KST)} 사이클)")
                 for time_str in CYCLE_AVAILABLE_KST:
                     as_of = f"{target_date} {time_str}"
-                    
-                    ncm_south = fetch_kma_future_ncm(
-                        33.3284, 126.8366, KMA_KEY, target_date, as_of_kst=as_of)
-                    ncm_north = fetch_kma_future_ncm_wind(
-                        KMA_KEY, target_date, as_of_kst=as_of)
-                    
-                    kma_data = _merge_south_north(ncm_south, ncm_north)
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
-                        
+
                 logger.info(f"[{target_date}] KMA 과거 소급 완료")
 
             elif target_d == today:
                 # ── 오늘: 이미 지난 사이클 순차 호출 + 최신 사이클 ──
-                # 이전 사이클로 00시~현재 이전 시간대를 채우고,
-                # 최신 사이클로 현재~23시 미래 시간대를 커버
                 logger.info(f"[{target_date}] KMA 오늘 멀티사이클 수집")
                 for time_str in CYCLE_AVAILABLE_KST:
                     cycle_time = datetime.strptime(
                         f"{target_date} {time_str}", "%Y-%m-%d %H:%M"
                     ).replace(tzinfo=KST)
-                    
+
                     # 아직 도래하지 않은 사이클은 건너뜀
                     if cycle_time > now_kst:
                         continue
-                    
+
                     as_of = f"{target_date} {time_str}"
-                    ncm_south = fetch_kma_future_ncm(
-                        33.3284, 126.8366, KMA_KEY, target_date, as_of_kst=as_of)
-                    ncm_north = fetch_kma_future_ncm_wind(
-                        KMA_KEY, target_date, as_of_kst=as_of)
-                    
-                    kma_data = _merge_south_north(ncm_south, ncm_north)
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
-                
+
                 # 마지막으로 현재 시각 기준 최신 사이클 (미래 시간대 커버)
-                ncm_south = fetch_kma_future_ncm(
-                    33.3284, 126.8366, KMA_KEY, target_date)
-                ncm_north = fetch_kma_future_ncm_wind(
-                    KMA_KEY, target_date)
-                
-                kma_data = _merge_south_north(ncm_south, ncm_north)
+                kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
                     logger.info(f"[{target_date}] KMA 오늘 멀티사이클 저장 완료")
                 else:
                     logger.warning(f"[{target_date}] KMA 최신 사이클 데이터 없음")
-                
+
             else:
                 # ── 미래: 최신 사이클 1회 ──
-                ncm_south = fetch_kma_future_ncm(
-                    33.3284, 126.8366, KMA_KEY, target_date)
-                ncm_north = fetch_kma_future_ncm_wind(
-                    KMA_KEY, target_date)
-                
-                kma_data = _merge_south_north(ncm_south, ncm_north)
+                kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
                     logger.info(f"[{target_date}] KMA {len(kma_data)}행 저장 완료")
@@ -489,18 +467,12 @@ def daily_forecast_kma(start_date, end_date):
                 logger.info(f"[{target_date}] 과거 소급 수집 ({len(CYCLE_AVAILABLE_KST)} 사이클)")
                 for time_str in CYCLE_AVAILABLE_KST:
                     as_of = f"{target_date} {time_str}"
-                    
-                    ncm_south = fetch_kma_future_ncm(
-                        33.3284, 126.8366, KMA_KEY, target_date, as_of_kst=as_of)
-                    
-                    ncm_north = fetch_kma_future_ncm_wind(
-                        KMA_KEY, target_date, as_of_kst=as_of)
-                    kma_data = _merge_south_north(ncm_south, ncm_north)
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
-                
+
                 logger.info(f"[{target_date}] 과거 소급 완료")
-                
+
             elif target_d == today:
                 # ── 오늘: 이미 지난 사이클 순차 호출 + 최신 사이클 ──
                 logger.info(f"[{target_date}] 오늘 멀티사이클 수집")
@@ -508,43 +480,28 @@ def daily_forecast_kma(start_date, end_date):
                     cycle_time = datetime.strptime(
                         f"{target_date} {time_str}", "%Y-%m-%d %H:%M"
                     ).replace(tzinfo=KST)
-                    
+
                     # 아직 도래하지 않은 사이클은 건너뜀
                     if cycle_time > now_kst:
                         continue
-                    
+
                     as_of = f"{target_date} {time_str}"
-                    ncm_south = fetch_kma_future_ncm(
-                        33.3284, 126.8366, KMA_KEY, target_date, as_of_kst=as_of)
-                    ncm_north = fetch_kma_future_ncm_wind(
-                        KMA_KEY, target_date, as_of_kst=as_of)
-                    
-                    kma_data = _merge_south_north(ncm_south, ncm_north)
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
-                
+
                 # 마지막으로 현재 시각 기준 최신 사이클 (미래 시간대 커버)
-                ncm_south = fetch_kma_future_ncm(
-                    33.3284, 126.8366, KMA_KEY, target_date)
-                ncm_north = fetch_kma_future_ncm_wind(
-                    KMA_KEY, target_date)
-                
-                kma_data = _merge_south_north(ncm_south, ncm_north)
+                kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
                     logger.info(f"[{target_date}] 오늘 멀티사이클 저장 완료")
                 else:
                     logger.warning(f"[{target_date}] 최신 사이클 데이터 없음")
-                    
+
             else:
                 # ── 미래: 현재 최신 사이클로 가능한 만큼 ──
                 logger.info(f"[{target_date}] 미래 - 현재 최신 사이클 호출")
-                ncm_south = fetch_kma_future_ncm(
-                    33.3284, 126.8366, KMA_KEY, target_date)
-                ncm_north = fetch_kma_future_ncm_wind(
-                    KMA_KEY, target_date)
-                
-                kma_data = _merge_south_north(ncm_south, ncm_north)
+                kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
                     logger.info(f"[{target_date}] {len(kma_data)}행 저장")
@@ -593,7 +550,19 @@ def _merge_south_north(ncm_south, ncm_north):
         return ncm_south
     return pd.DataFrame()
 
-    
+
+def _fetch_kma_concurrent(target_date, as_of_kst=None):
+    """남쪽(전체기상) + 북쪽(풍속) NCM을 동시 수집 후 병합"""
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        f_south = ex.submit(fetch_kma_future_ncm,
+                            33.3284, 126.8366, KMA_KEY, target_date, as_of_kst)
+        f_north = ex.submit(fetch_kma_future_ncm_wind,
+                            KMA_KEY, target_date, as_of_kst)
+        ncm_south = f_south.result()
+        ncm_north = f_north.result()
+    return _merge_south_north(ncm_south, ncm_north)
+
+
 # ============================================================================
 # 유틸리티: 모델 입력 데이터 준비
 # ============================================================================
