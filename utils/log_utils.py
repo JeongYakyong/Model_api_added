@@ -15,9 +15,9 @@ expander styled as a mini-terminal. The expander opens/closes
 client-side without triggering a Streamlit rerun.
 """
 import logging
+import threading
 from datetime import datetime
 import streamlit as st
-from streamlit.runtime.scriptrunner import get_script_run_ctx
 from contextlib import contextmanager
 
 # Module-level loggers used across the project
@@ -37,8 +37,8 @@ def _get_log_buffer():
 
 def _append_log(level_name, message):
     """Append a log entry to the session-state buffer."""
-    if get_script_run_ctx() is None:
-        return  # worker thread — no session state available
+    if not hasattr(threading.current_thread(), "streamlit_script_run_ctx"):
+        return  # worker thread — no Streamlit context available
     buf = _get_log_buffer()
     ts = datetime.now().strftime("%H:%M:%S")
     buf.append(f"[{ts}] {level_name:7s} | {message}")
