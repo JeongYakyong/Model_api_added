@@ -142,20 +142,20 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
         wind_flow = _time_block_summary(df, 'wind_spd')
         net_flow = _time_block_summary(df, 'est_net_demand')
 
-        # ── 태양광 후처리 감지 (solar_rad 기반 재계산) ──
-        SOLAR_RAD_THRESHOLD = 0.85
-        SOLAR_CLIP_POWER = 2.0
-        max_solar_rad = df['solar_rad'].max() if 'solar_rad' in df.columns else 999
-        solar_clipped = max_solar_rad < SOLAR_RAD_THRESHOLD
-        if solar_clipped:
-            max_clip_pct = (max_solar_rad / SOLAR_RAD_THRESHOLD) ** SOLAR_CLIP_POWER * 100
-            clip_info = (
-                f"  ⚠ 저일사 후처리 적용: 일 최대 일사량 {max_solar_rad:.2f} MJ/m2 "
-                f"(기준 {SOLAR_RAD_THRESHOLD} 미만), "
-                f"태양광 이용률 최대 {max_clip_pct:.0f}%로 압축"
-            )
-        else:
-            clip_info = ""
+ #       # ── 태양광 후처리 감지 (solar_rad 기반 재계산) ──
+ #       SOLAR_RAD_THRESHOLD = 0.85
+ #       SOLAR_CLIP_POWER = 2.0
+ #       max_solar_rad = df['solar_rad'].max() if 'solar_rad' in df.columns else 999
+ #       solar_clipped = max_solar_rad < SOLAR_RAD_THRESHOLD
+ #       if solar_clipped:
+ #           max_clip_pct = (max_solar_rad / SOLAR_RAD_THRESHOLD) ** SOLAR_CLIP_POWER * 100
+ #           clip_info = (
+ #               f"  ⚠ 저일사 후처리 적용: 일 최대 일사량 {max_solar_rad:.2f} MJ/m2 "
+ #               f"(기준 {SOLAR_RAD_THRESHOLD} 미만), "
+ #               f"태양광 이용률 최대 {max_clip_pct:.0f}%로 압축"
+ #           )
+ #       else:
+ #           clip_info = ""
 
         # ── 리스크 감지 (코드 확정) ──
         risks = _detect_risks(df, warn_low, warn_high, smp_threshold)
@@ -189,7 +189,7 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
 {risk_str}
 
 [작성 규칙]
-1. 최대 7줄, 각 항목 '•' 기호 + 두 번 줄바꿈(\\n\\n) 개조식.
+1. 최대 5줄, 각 항목 '•' 기호 + 두 번 줄바꿈(\\n\\n) 개조식.
 2. 첫 항목: 시간대별 기상 흐름 요약 ('오전 흐림→오후 비', '종일 맑고 바람 약함' 등 상태 위주).
 3. 둘째 항목: 태양광/풍력 이용률 동향.
 4. 강수가 0보다 크면 강수 시간대와 예측 정확도 저하 가능성 언급.
@@ -199,9 +199,9 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
    -  고부하 → "순부하 증가로 LNG 발전량 증가 예상"
    -  정상 → "LNG 발전 운영 안정적 유지 전망"
 6. 다섯번째 항목 : [감지된 리스크]와 시간대별 순부하에 기반한 야간 LNG 운영 방향.
-7. 여섯번째 항목 : 저일사 후처리가 적용된 경우에만 해당, 둘째 항목에 "저일사 후처리 적용(최대 N%)" 문구를 반드시 포함.
-8. "~입니다", "~습니다" 경어체.
+7. "~입니다", "~습니다" 경어체.
 """
+#7. 여섯번째 항목 : 저일사 후처리가 적용된 경우에만 해당, 둘째 항목에 "저일사 후처리 적용(최대 N%)" 문구를 반드시 포함.
 
     try:
         client = genai.Client()
