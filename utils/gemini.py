@@ -159,11 +159,11 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
 
         # ── 리스크 감지 (코드 확정) ──
         risks = _detect_risks(df, warn_low, warn_high, smp_threshold)
-        if solar_clipped:
-            risks.append(
-                f"저일사 후처리: 일 최대 일사량 {max_solar_rad:.2f} MJ/m2, "
-                f"태양광 예측 이용률 최대 {max_clip_pct:.0f}%로 압축됨"
-            )
+        #if solar_clipped:
+        #    risks.append(
+        #        f"저일사 후처리: 일 최대 일사량 {max_solar_rad:.2f} MJ/m2, "
+        #        f"태양광 예측 이용률 최대 {max_clip_pct:.0f}%로 압축됨"
+        #    )
         risk_str = "\n".join(f"  ⚠ {r}" for r in risks) if risks else "정상 범위"
 
     except Exception as e:
