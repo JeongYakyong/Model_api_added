@@ -801,9 +801,10 @@ def run_model_prediction(target_date, db, assets):
     # P75 of daytime solar_rad → smooth scale via sigmoid
     # scale = floor + (1 - floor) * sigmoid(k * (P75 - mid))
     # Parameters tuned from 822 days of 2024+ historical data
-    SOLAR_SIGMOID_MID = 1.32    # P75 midpoint (fitted from 822 days, 2024+)
-    SOLAR_SIGMOID_K = 2.25      # steepness
-    SOLAR_SIGMOID_FLOOR = 0.17  # minimum scale (diffuse radiation)
+    SOLAR_SIGMOID_MID = 1.45    # P75 midpoint (fitted from Feb-Apr 2026 model results)
+    SOLAR_SIGMOID_K = 5.5       # steepness (softened from 12.6 for robustness)
+    SOLAR_SIGMOID_FLOOR = 0.33  # minimum scale (model already adjusts for clouds)
+    # 기존 1.32 2.25 0.17
 
     raw_solar_rad = df['solar_rad'].iloc[seq_len_max:total_len].values
     daytime_rad = raw_solar_rad[raw_solar_rad > 0]
