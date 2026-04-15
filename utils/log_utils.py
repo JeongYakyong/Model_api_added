@@ -57,6 +57,28 @@ class _BufferHandler(logging.Handler):
             self.handleError(record)
 
 
+def _attach_handler():
+    """Create and attach a _BufferHandler, removing any stale ones first."""
+    handler = _BufferHandler()
+    handler.setFormatter(logging.Formatter("%(message)s"))
+
+    loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
+    for lgr in loggers:
+        # Remove stale _BufferHandlers left from interrupted Streamlit reruns
+        for h in lgr.handlers[:]:
+            if isinstance(h, _BufferHandler):
+                lgr.removeHandler(h)
+        lgr.addHandler(handler)
+
+    return loggers, handler
+
+
+def _detach_handler(loggers, handler):
+    """Remove the handler from all loggers."""
+    for lgr in loggers:
+        lgr.removeHandler(handler)
+
+
 @contextmanager
 def st_log_status(label="실행 중...", done_label="완료"):
     """
@@ -72,12 +94,7 @@ def st_log_status(label="실행 중...", done_label="완료"):
     """
     _append_log("INFO", f"── {label} ──")
 
-    handler = _BufferHandler()
-    handler.setFormatter(logging.Formatter("%(message)s"))
-
-    loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
-    for lgr in loggers:
-        lgr.addHandler(handler)
+    loggers, handler = _attach_handler()
 
     try:
         with st.spinner(label):
@@ -88,8 +105,7 @@ def st_log_status(label="실행 중...", done_label="완료"):
     else:
         _append_log("INFO", f"── {done_label} ──")
     finally:
-        for lgr in loggers:
-            lgr.removeHandler(handler)
+        _detach_handler(loggers, handler)
 
 
 @contextmanager
@@ -105,17 +121,11 @@ def log_capture():
             with st.spinner("② KMA 수집 중..."):
                 daily_historical_kma(...)
     """
-    handler = _BufferHandler()
-    handler.setFormatter(logging.Formatter("%(message)s"))
-
-    loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
-    for lgr in loggers:
-        lgr.addHandler(handler)
+    loggers, handler = _attach_handler()
     try:
         yield
     finally:
-        for lgr in loggers:
-            lgr.removeHandler(handler)
+        _detach_handler(loggers, handler)
 
 
 # ============================================================================
