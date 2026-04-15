@@ -829,11 +829,9 @@ def run_model_prediction(target_date, db, assets):
     pred_wind = np.clip(pred_wind, a_min=0.0, a_max=1.0)
 
     # ── 태양광 후처리: 저일사일 이용률 압축 ──
-    # Trigger: P75 of daytime solar_rad < threshold (robust to single spikes)
-    # Step 1: linear per-hour scaling (gentle on tails)
-    # Step 2: quadratic daily cap (compresses peak)
+    # Trigger: P75 of daytime solar_rad < 0.65 (robust to single spikes)
+    # Method: uniform daily scale = (P75 / 0.65)^2 — preserves model's bell shape
     SOLAR_RAD_P75_THRESHOLD = 0.65
-    SOLAR_RAD_CLIP_BASE = 0.85
 
     raw_solar_rad = df['solar_rad'].iloc[seq_len_max:total_len].values
     daytime_rad = raw_solar_rad[raw_solar_rad > 0]
@@ -845,18 +843,14 @@ def run_model_prediction(target_date, db, assets):
 
     if daily_p75_rad < SOLAR_RAD_P75_THRESHOLD:
         solar_postprocess_applied = True
-        # Step 1: linear per-hour scaling
-        clip_factor = np.clip(raw_solar_rad / SOLAR_RAD_CLIP_BASE, 0, 1)
-        pred_solar = pred_solar * clip_factor
-        # Step 2: quadratic daily cap on utilization
-        daily_util_cap = (daily_p75_rad / SOLAR_RAD_P75_THRESHOLD) ** 2
-        pred_solar = np.minimum(pred_solar, daily_util_cap)
+        daily_scale = (daily_p75_rad / SOLAR_RAD_P75_THRESHOLD) ** 2
+        pred_solar = pred_solar * daily_scale
 
-        solar_max_clip_pct = round(float(daily_util_cap) * 100, 1)
+        solar_max_clip_pct = round(float(daily_scale) * 100, 1)
         logger.info(
             f"[{target_date}] 태양광 후처리 적용: "
             f"P75 일사량={daily_p75_rad:.2f} MJ/m2 (기준 {SOLAR_RAD_P75_THRESHOLD}), "
-            f"이용률 상한 {solar_max_clip_pct:.1f}%"
+            f"예측 스케일 {solar_max_clip_pct:.1f}%"
         )
 
     input_info["solar_postprocess"] = solar_postprocess_applied
