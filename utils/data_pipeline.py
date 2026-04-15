@@ -797,33 +797,33 @@ def run_model_prediction(target_date, db, assets):
     pred_solar = np.clip(pred_solar, a_min=0.0, a_max=1.0)
     pred_wind = np.clip(pred_wind, a_min=0.0, a_max=1.0)
 
-    # ── 태양광 후처리: 저일사일 이용률 압축 ──
-    # Trigger: P75 of daytime solar_rad < 0.65 (robust to single spikes)
-    # Method: uniform daily scale = (P75 / 0.65)^2 — preserves model's bell shape
-    SOLAR_RAD_P75_THRESHOLD = 0.65
+    # ── 태양광 후처리: sigmoid 기반 일사량 스케일링 ──
+    # P75 of daytime solar_rad → smooth scale via sigmoid
+    # scale = floor + (1 - floor) * sigmoid(k * (P75 - mid))
+    # Parameters tuned from 822 days of 2024+ historical data
+    SOLAR_SIGMOID_MID = 1.32    # P75 midpoint (fitted from 822 days, 2024+)
+    SOLAR_SIGMOID_K = 2.25      # steepness
+    SOLAR_SIGMOID_FLOOR = 0.17  # minimum scale (diffuse radiation)
 
     raw_solar_rad = df['solar_rad'].iloc[seq_len_max:total_len].values
     daytime_rad = raw_solar_rad[raw_solar_rad > 0]
     daily_p75_rad = float(np.percentile(daytime_rad, 75)) if len(daytime_rad) > 0 else 0.0
     daily_max_rad = float(raw_solar_rad.max())
 
-    solar_postprocess_applied = False
-    solar_max_clip_pct = 100.0
+    sigmoid_val = 1.0 / (1.0 + np.exp(-SOLAR_SIGMOID_K * (daily_p75_rad - SOLAR_SIGMOID_MID)))
+    daily_scale = SOLAR_SIGMOID_FLOOR + (1.0 - SOLAR_SIGMOID_FLOOR) * sigmoid_val
+    daily_scale = min(daily_scale, 1.0)
 
-    if daily_p75_rad < SOLAR_RAD_P75_THRESHOLD:
-        solar_postprocess_applied = True
-        daily_scale = (daily_p75_rad / SOLAR_RAD_P75_THRESHOLD) ** 2
-        pred_solar = pred_solar * daily_scale
+    pred_solar = pred_solar * daily_scale
+    solar_scale_pct = round(float(daily_scale) * 100, 1)
 
-        solar_max_clip_pct = round(float(daily_scale) * 100, 1)
-        logger.info(
-            f"[{target_date}] 태양광 후처리 적용: "
-            f"P75 일사량={daily_p75_rad:.2f} MJ/m2 (기준 {SOLAR_RAD_P75_THRESHOLD}), "
-            f"예측 스케일 {solar_max_clip_pct:.1f}%"
-        )
+    logger.info(
+        f"[{target_date}] 태양광 후처리: "
+        f"P75={daily_p75_rad:.2f} MJ/m² → 스케일 {solar_scale_pct:.1f}%"
+    )
 
-    input_info["solar_postprocess"] = solar_postprocess_applied
-    input_info["solar_max_clip_pct"] = solar_max_clip_pct
+    input_info["solar_postprocess"] = True
+    input_info["solar_scale_pct"] = solar_scale_pct
     input_info["solar_daily_max_rad"] = daily_max_rad
     input_info["solar_daily_p75_rad"] = daily_p75_rad
 
