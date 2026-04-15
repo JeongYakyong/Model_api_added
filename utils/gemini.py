@@ -142,8 +142,28 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
         wind_flow = _time_block_summary(df, 'wind_spd')
         net_flow = _time_block_summary(df, 'est_net_demand')
 
+        # ── 태양광 후처리 감지 (solar_rad 기반 재계산) ──
+        SOLAR_RAD_THRESHOLD = 0.85
+        SOLAR_CLIP_POWER = 2.0
+        max_solar_rad = df['solar_rad'].max() if 'solar_rad' in df.columns else 999
+        solar_clipped = max_solar_rad < SOLAR_RAD_THRESHOLD
+        if solar_clipped:
+            max_clip_pct = (max_solar_rad / SOLAR_RAD_THRESHOLD) ** SOLAR_CLIP_POWER * 100
+            clip_info = (
+                f"  ⚠ 저일사 후처리 적용: 일 최대 일사량 {max_solar_rad:.2f} MJ/m2 "
+                f"(기준 {SOLAR_RAD_THRESHOLD} 미만), "
+                f"태양광 이용률 최대 {max_clip_pct:.0f}%로 압축"
+            )
+        else:
+            clip_info = ""
+
         # ── 리스크 감지 (코드 확정) ──
         risks = _detect_risks(df, warn_low, warn_high, smp_threshold)
+        if solar_clipped:
+            risks.append(
+                f"저일사 후처리: 일 최대 일사량 {max_solar_rad:.2f} MJ/m2, "
+                f"태양광 예측 이용률 최대 {max_clip_pct:.0f}%로 압축됨"
+            )
         risk_str = "\n".join(f"  ⚠ {r}" for r in risks) if risks else "정상 범위"
 
     except Exception as e:
@@ -179,7 +199,8 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
    -  고부하 → "순부하 증가로 LNG 발전량 증가 예상"
    -  정상 → "LNG 발전 운영 안정적 유지 전망"
 6. 다섯번째 항목 : [감지된 리스크]와 시간대별 순부하에 기반한 야간 LNG 운영 방향.
-7. "~입니다", "~습니다" 경어체.
+7. 저일사 후처리가 적용된 경우, 둘째 항목에 "저일사 후처리 적용(최대 N%)" 문구를 반드시 포함.
+8. "~입니다", "~습니다" 경어체.
 """
 
     try:
