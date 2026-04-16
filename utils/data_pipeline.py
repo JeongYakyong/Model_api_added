@@ -7,6 +7,7 @@ from utils.api_fetchers import (
     fetch_kma_future_ncm,
     fetch_kma_future_ncm_wind,
     fetch_kma_past_asos_wind,
+    warmup_kma_session,
 )
 import pandas as pd
 pd.set_option('future.no_silent_downcasting', True)
@@ -553,6 +554,7 @@ def _merge_south_north(ncm_south, ncm_north):
 
 def _fetch_kma_concurrent(target_date, as_of_kst=None):
     """남쪽(전체기상) + 북쪽(풍속) NCM을 동시 수집 후 병합"""
+    warmup_kma_session(KMA_KEY)
     with ThreadPoolExecutor(max_workers=2) as ex:
         f_south = ex.submit(fetch_kma_future_ncm,
                             33.3284, 126.8366, KMA_KEY, target_date, as_of_kst)

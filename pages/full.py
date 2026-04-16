@@ -36,7 +36,7 @@ from utils.gemini import (
     generate_energy_narrative,
     load_briefings_from_file, save_briefing_to_file, render_briefing_expander,
 )
-from utils.log_utils import st_log_status, render_log_viewer, render_log_sidebar_toggle
+from utils.log_utils import st_log_status, render_log_sidebar_toggle
 
 
 
@@ -676,22 +676,49 @@ elif menu == "Option C : 예측 결과 시각화":
             pass
     st.subheader("📈 예측 결과 및 Net Demand 분석")
     st.caption("매일 자정마다 업데이트 되는 데이터로 모델이 예측한 가동률을 실측 발전량과 순부하(Net Demand)를 시각화합니다. 실측 데이터 오버레이 선택가능.")
-    st.markdown("---")
-    
+
     # 💡 session_state에서 마지막 예측 날짜를 기본값으로 사용
-    default_vis_date = st.session_state.get('last_predicted_date', datetime.now().date())
-    target_date = st.date_input("조회할 예측 날짜 선택", default_vis_date)
-    
+    if 'full_vis_date' not in st.session_state:
+        st.session_state['full_vis_date'] = st.session_state.get('last_predicted_date', datetime.now().date())
+
+    # ── 날짜 네비게이션 + 컨트롤 — 한 줄 ──
+    col_prev, col_date, col_next, col_btn, col_overlay, col_pred = st.columns([0.3, 1, 0.3, 1, 1, 1])
+
+    with col_prev:
+        if st.button("＜", width='stretch', key="full_btn_prev_day", help="이전 날짜"):
+            cur = st.session_state.get('full_vis_date', datetime.now().date())
+            st.session_state['full_vis_date'] = cur - timedelta(days=1)
+            st.rerun()
+    with col_next:
+        if st.button("＞", width='stretch', key="full_btn_next_day", help="다음 날짜"):
+            cur = st.session_state.get('full_vis_date', datetime.now().date())
+            st.session_state['full_vis_date'] = cur + timedelta(days=1)
+            st.rerun()
+
+    with col_date:
+        target_date = st.date_input(
+            "조회 날짜",
+            key="full_vis_date",
+            label_visibility="collapsed"
+        )
+
+    st.markdown("---")
+
     start_str = f"{target_date} 00:00:00"
     end_str = f"{target_date} 23:00:00"
     df_res = db.get_forecast(start_str, end_str)
     
     if df_res.empty or 'est_Solar_Utilization' not in df_res.columns or df_res['est_Solar_Utilization'].isnull().all():
+        with col_btn:
+            st.button("⚙️ 표시 항목", width='stretch', key="full_btn_plot_items_empty", disabled=True)
+        with col_overlay:
+            st.button("📊 실측 OFF", width='stretch', disabled=True, key="full_btn_overlay_empty")
+        with col_pred:
+            if st.button("🔮 발전량 예측으로 이동", type="primary", width='stretch', key="val_to_pred"):
+                st.session_state['last_predicted_date'] = target_date
+                st.session_state["_navigate_to"] = "Option B : 발전량 예측"
+                st.rerun()
         st.warning(f"{target_date}의 예측 데이터가 없습니다. [Option B : 발전량 예측]에서 먼저 예측을 실행해 주세요.")
-        if st.button("🔮 발전량 예측으로 이동 →", key="val_to_pred"):
-            st.session_state['last_predicted_date'] = target_date
-            st.session_state["_navigate_to"] = "Option B : 발전량 예측"
-            st.rerun()
     else:
         df = df_res.copy()
         
@@ -783,30 +810,50 @@ elif menu == "Option C : 예측 결과 시각화":
                 if available_actual:
                     st.session_state['vis_actual_cols'] = [k for k, v in act_selections.items() if v]
                 st.rerun()
-                
+
+        # ── 상단 컨트롤: 표시 항목 / 오버레이 / 예측 이동 버튼 ──
+        with col_btn:
+            if st.button("⚙️ 표시 항목", width='stretch', key="full_btn_plot_items"):
+                select_plot_items()
+        with col_overlay:
+            ov_sub1, ov_sub2 = st.columns([4, 1])
+            with ov_sub1:
+                if has_actual and available_actual:
+                    is_on = st.session_state.get('vis_show_actual', False)
+                    if st.button("📊 실측 ON" if is_on else "📊 실측 OFF",
+                                 type="primary" if is_on else "secondary",
+                                 width='stretch', key="full_btn_overlay_toggle"):
+                        st.session_state['vis_show_actual'] = not is_on
+                        st.rerun()
+                else:
+                    st.button("📊 실측 OFF", width='stretch', disabled=True, key="full_btn_overlay_disabled")
+            with ov_sub2:
+                if st.button("🔄", width='stretch', key="full_btn_refresh_actual", help="실측 데이터 새로고침"):
+                    fetch_kpx_past_15min.clear()
+                    st.rerun()
+        with col_pred:
+            if st.button("🔮 발전량 예측 이동", width='stretch', key="full_btn_goto_pred"):
+                st.session_state['last_predicted_date'] = target_date
+                st.session_state["_navigate_to"] = "Option B : 발전량 예측"
+                st.rerun()
+
         # ── 2탭 구성 ──
         tab_chart, tab_table = st.tabs(["📈 시각화", "📋 데이터 테이블"])
-        
+
         # 설정값 로드
         selected_vars = st.session_state['vis_selected_vars']
         warning_threshold = st.session_state['vis_warn_low']
         warning_threshold2 = st.session_state['vis_warn_high']
         smp_threshold = st.session_state['vis_smp_low'] if smp_col else 0
-        
+
         # --- Tab 1: 시각화 차트 ---
         with tab_chart:
-            # ── 차트 위: 표시 항목 설정 버튼 ──
-            btn_col1, btn_col2 = st.columns([1, 5])
-            with btn_col1:
-                if st.button("⚙️ 표시 항목 설정", width='stretch'):
-                    select_plot_items()
-            with btn_col2:
-                # 현재 선택된 항목 요약 표시
-                if selected_vars:
-                    labels = [plot_options.get(v, v).split('(')[0].strip() for v in selected_vars]
-                    st.caption(f"📌 {', '.join(labels)}")
-                else:
-                    st.caption("📌 표시 항목 없음 — 버튼을 눌러 선택하세요")
+            # 현재 선택된 항목 요약 표시
+            if selected_vars:
+                labels = [plot_options.get(v, v).split('(')[0].strip() for v in selected_vars]
+                st.caption(f"📌 {', '.join(labels)}")
+            else:
+                st.caption("📌 표시 항목 없음 — 상단 [⚙️ 표시 항목] 버튼을 눌러 선택하세요")
             
             if not selected_vars:
                 st.info("👉 [⚙️ 표시 항목 설정] 버튼을 눌러 시각화할 데이터를 선택해 주세요.")
@@ -902,18 +949,10 @@ elif menu == "Option C : 예측 결과 시각화":
                 )
                 
                 st.plotly_chart(fig, width="stretch")
-            # ── 차트 아래: 실측 오버레이 체크박스 + 새로고침 ──
-            if has_actual:
-                ov_col1, ov_col2 = st.columns([6, 1])
-                with ov_col1:
-                    st.checkbox("📊 실측 데이터 오버레이", key='vis_show_actual')
-                with ov_col2:
-                    if st.button("🔄", key="full_btn_refresh_actual", help="실측 데이터 새로고침"):
-                        fetch_kpx_past_15min.clear()
-                        st.rerun()
-            else:
-                st.info("ℹ️ 실측 데이터가 없습니다. 새로고침 혹은 API 데이터 호출이 필요합니다.")
-                
+
+            if not has_actual:
+                st.info("ℹ️ 실측 데이터가 없습니다. 상단 🔄 버튼으로 새로고침 해 주세요.")
+
             st.caption("순부하(net_demand) : 전체 부하에서 신재생발전을 제외한 내연 발전기 및 연계선이 담당해야 할 총 전력부하로 전력거래소에서 판단하여 제어.")
         
             render_briefing_expander(df, warning_threshold, warning_threshold2, smp_threshold,
@@ -1697,8 +1736,3 @@ elif menu == "Option E : 데이터 분석 (EDA)" :
 elif menu == "Option F : 시스템 안내":
     render_system_info()
 
-# ==========================================
-# 페이지 하단 로그 뷰어
-# ==========================================
-st.markdown("---")
-render_log_viewer()

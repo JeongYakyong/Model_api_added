@@ -27,7 +27,7 @@ from utils.gemini import (
     generate_energy_narrative,
     load_briefings_from_file, save_briefing_to_file, render_briefing_expander,
 )
-from utils.log_utils import st_log_status, render_log_viewer, render_log_sidebar_toggle
+from utils.log_utils import st_log_status, render_log_sidebar_toggle
 
 
 # ==========================================
@@ -638,8 +638,3 @@ elif lite_menu == "🗂️ DB 수집현황":
                 except Exception as e:
                     st.error(f"수집 실패: {e}")
 
-# ==========================================
-# 페이지 하단 로그 뷰어
-# ==========================================
-st.markdown("---")
-render_log_viewer()

@@ -15,6 +15,32 @@ logger.setLevel(logging.DEBUG)
 
 
 # ============================================================================
+# KMA NCM API — persistent session with connection pooling
+# ============================================================================
+_kma_session = requests.Session()
+_kma_session.mount("https://apihub.kma.go.kr/", HTTPAdapter(
+    pool_connections=4,
+    pool_maxsize=20,
+))
+
+def warmup_kma_session(auth_key):
+    """
+    Pre-establish TCP+TLS connection to KMA API server.
+    Cheap when connections are alive (~100ms), valuable when
+    they've expired after idle (~500ms vs cold parallel burst).
+    Called before every NCM batch — no flag needed.
+    """
+    try:
+        _kma_session.get(
+            "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-kim_nc_pt_txt2",
+            params={'help': '1', 'authKey': auth_key},
+            timeout=10,
+        )
+    except Exception:
+        pass
+
+
+# ============================================================================
 # 1. KPX API - 계통 데이터
 # ============================================================================
 
@@ -496,9 +522,8 @@ def fetch_kma_future_ncm(lat, lon, auth_key, base_date_kst, as_of_kst=None):
                 f"{target_hours[-1][1].strftime('%H')}시 KST "
                 f"({len(target_hours)}시간, offset +{target_hours[0][0]}h ~ +{target_hours[-1][0]}h)")
 
-    # ── 4) API 호출 (병렬) ──
+    # ── 4) API 호출 (병렬, 공유 세션) ──
     url = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-kim_nc_pt_txt2"
-    session = requests.Session()
     rows = []
 
     def fetch_hour(hour_offset, kst_time):
@@ -512,7 +537,7 @@ def fetch_kma_future_ncm(lat, lon, auth_key, base_date_kst, as_of_kst=None):
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                resp = session.get(url, params=params, timeout=30)
+                resp = _kma_session.get(url, params=params, timeout=30)
                 if resp.status_code == 200:
                     data = parse_raw_text_by_varn(resp.text)
                     if data:
@@ -537,8 +562,6 @@ def fetch_kma_future_ncm(lat, lon, auth_key, base_date_kst, as_of_kst=None):
             if res:
                 rows.append(res)
 
-    session.close()
-
     if not rows:
         # 최신 사이클에서 데이터 없음 → 이전 사이클로 폴백 시도
         candidates.remove(best_cycle_utc)
@@ -546,14 +569,14 @@ def fetch_kma_future_ncm(lat, lon, auth_key, base_date_kst, as_of_kst=None):
             fallback_cycle_utc = max(candidates)
             fallback_tmfc = fallback_cycle_utc.strftime('%Y%m%d%H')
             logger.warning(f"[KMA NCM] 데이터 없음 → 이전 사이클 {fallback_tmfc} UTC로 재시도")
-            
+
             # as_of를 폴백 사이클 배포 시점으로 조정하여 재귀 호출
             fallback_kst = fallback_cycle_utc.astimezone(KST) + timedelta(hours=PUBLISH_DELAY_H)
             return fetch_kma_future_ncm(
                 lat, lon, auth_key, base_date_kst,
                 as_of_kst=fallback_kst
             )
-        
+
         logger.error("[KMA NCM] 모든 사이클 시도 실패")
         return pd.DataFrame()
 
@@ -696,9 +719,8 @@ def fetch_kma_future_ncm_north(lat, lon, auth_key, base_date_kst, as_of_kst=None
                 f"{target_hours[-1][1].strftime('%H')}시 KST "
                 f"({len(target_hours)}시간, offset +{target_hours[0][0]}h ~ +{target_hours[-1][0]}h)")
 
-    # ── 4) API 호출 (병렬) ──
+    # ── 4) API 호출 (병렬, 공유 세션) ──
     url = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-kim_nc_pt_txt2"
-    session = requests.Session()
     rows = []
 
     def fetch_hour(hour_offset, kst_time):
@@ -712,7 +734,7 @@ def fetch_kma_future_ncm_north(lat, lon, auth_key, base_date_kst, as_of_kst=None
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                resp = session.get(url, params=params, timeout=30)
+                resp = _kma_session.get(url, params=params, timeout=30)
                 if resp.status_code == 200:
                     data = parse_raw_text_by_varn(resp.text)
                     if data:
@@ -737,8 +759,6 @@ def fetch_kma_future_ncm_north(lat, lon, auth_key, base_date_kst, as_of_kst=None
             if res:
                 rows.append(res)
 
-    session.close()
-
     if not rows:
         # 최신 사이클에서 데이터 없음 → 이전 사이클로 폴백 시도
         candidates.remove(best_cycle_utc)
@@ -746,14 +766,14 @@ def fetch_kma_future_ncm_north(lat, lon, auth_key, base_date_kst, as_of_kst=None
             fallback_cycle_utc = max(candidates)
             fallback_tmfc = fallback_cycle_utc.strftime('%Y%m%d%H')
             logger.warning(f"[KMA NCM] 데이터 없음 → 이전 사이클 {fallback_tmfc} UTC로 재시도")
-            
+
             # as_of를 폴백 사이클 배포 시점으로 조정하여 재귀 호출
             fallback_kst = fallback_cycle_utc.astimezone(KST) + timedelta(hours=PUBLISH_DELAY_H)
             return fetch_kma_future_ncm(
                 lat, lon, auth_key, base_date_kst,
                 as_of_kst=fallback_kst
             )
-        
+
         logger.error("[KMA NCM] 모든 사이클 시도 실패")
         return pd.DataFrame()
 
@@ -972,7 +992,6 @@ def fetch_kma_future_ncm_north_single(lat, lon, auth_key, base_date_kst, as_of_k
         return pd.DataFrame()
 
     url = "https://apihub.kma.go.kr/api/typ01/cgi-bin/url/nph-kim_nc_pt_txt2"
-    session = requests.Session()
     rows = []
 
     def fetch_hour(hour_offset, kst_time):
@@ -986,7 +1005,7 @@ def fetch_kma_future_ncm_north_single(lat, lon, auth_key, base_date_kst, as_of_k
         max_retries = 3
         for attempt in range(max_retries):
             try:
-                resp = session.get(url, params=params, timeout=30)
+                resp = _kma_session.get(url, params=params, timeout=30)
                 if resp.status_code == 200:
                     data = parse_raw_text_by_varn(resp.text)
                     if data:
@@ -1007,8 +1026,6 @@ def fetch_kma_future_ncm_north_single(lat, lon, auth_key, base_date_kst, as_of_k
             res = future.result()
             if res:
                 rows.append(res)
-
-    session.close()
 
     if not rows:
         candidates.remove(best_cycle_utc)

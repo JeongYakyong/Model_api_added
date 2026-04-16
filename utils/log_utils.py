@@ -2,17 +2,17 @@
 Streamlit-aware logging utility.
 
 Usage in pages:
-    from utils.log_utils import st_log_status, render_log_viewer
+    from utils.log_utils import st_log_status, render_log_sidebar_toggle
 
     with st_log_status("데이터 수집 중..."):
         daily_historical_update(start, end)
 
     # In sidebar (call once per page, after sidebar menu):
-    render_log_viewer()
+    render_log_sidebar_toggle()
 
-Logs are buffered to st.session_state and displayed in a sidebar
-expander styled as a mini-terminal. The expander opens/closes
-client-side without triggering a Streamlit rerun.
+Logs are displayed inline via st.status() during execution (auto-collapses
+on completion), and buffered to st.session_state for the sidebar
+mini-terminal history viewer.
 """
 import logging
 import threading
@@ -57,6 +57,22 @@ class _BufferHandler(logging.Handler):
             self.handleError(record)
 
 
+class _InlineHandler(logging.Handler):
+    """logging.Handler that writes log lines into a Streamlit container (st.status)."""
+
+    def __init__(self, container):
+        super().__init__()
+        self._container = container
+
+    def emit(self, record):
+        try:
+            msg = self.format(record)
+            ts = datetime.now().strftime("%H:%M:%S")
+            self._container.text(f"[{ts}] {record.levelname:7s} | {msg}")
+        except Exception:
+            pass  # worker thread or closed container
+
+
 def _attach_handler():
     """Create and attach a _BufferHandler, removing any stale ones first."""
     handler = _BufferHandler()
@@ -82,30 +98,61 @@ def _detach_handler(loggers, handler):
 @contextmanager
 def st_log_status(label="실행 중...", done_label="완료"):
     """
-    Context manager: shows st.spinner() for visual feedback and
-    captures all logging output into the persistent session-state buffer.
+    Context manager: captures logging output to the session-state buffer.
 
-    No inline log display — logs are only viewable via the sidebar
-    mini-terminal (render_log_viewer).
+    When the sidebar '실시간 로그' checkbox is ON, logs also stream inline
+    via st.status() (auto-collapses on completion). When OFF, a plain
+    st.spinner() is shown instead.
 
     Args:
-        label: spinner text shown while running
-        done_label: text logged on completion
+        label: status text shown while running
+        done_label: text shown on completion
     """
     _append_log("INFO", f"── {label} ──")
 
-    loggers, handler = _attach_handler()
+    inline_enabled = st.session_state.get('_inline_log_enabled', False)
 
-    try:
-        with st.spinner(label):
-            yield
-    except Exception:
-        _append_log("ERROR", f"── {label} - 오류 발생 ──")
-        raise
+    if inline_enabled:
+        with st.status(label, expanded=True) as status:
+            buf_handler = _BufferHandler()
+            buf_handler.setFormatter(logging.Formatter("%(message)s"))
+
+            inline_handler = _InlineHandler(status)
+            inline_handler.setFormatter(logging.Formatter("%(message)s"))
+
+            loggers = [logging.getLogger(name) for name in LOGGER_NAMES]
+            for lgr in loggers:
+                for h in lgr.handlers[:]:
+                    if isinstance(h, (_BufferHandler, _InlineHandler)):
+                        lgr.removeHandler(h)
+                lgr.addHandler(buf_handler)
+                lgr.addHandler(inline_handler)
+
+            try:
+                yield
+            except Exception:
+                _append_log("ERROR", f"── {label} - 오류 발생 ──")
+                status.update(label=f"❌ {label} - 오류 발생", state="error", expanded=True)
+                raise
+            else:
+                _append_log("INFO", f"── {done_label} ──")
+                status.update(label=f"✅ {done_label}", state="complete", expanded=False)
+            finally:
+                for lgr in loggers:
+                    lgr.removeHandler(buf_handler)
+                    lgr.removeHandler(inline_handler)
     else:
-        _append_log("INFO", f"── {done_label} ──")
-    finally:
-        _detach_handler(loggers, handler)
+        loggers, handler = _attach_handler()
+        try:
+            with st.spinner(label):
+                yield
+        except Exception:
+            _append_log("ERROR", f"── {label} - 오류 발생 ──")
+            raise
+        else:
+            _append_log("INFO", f"── {done_label} ──")
+        finally:
+            _detach_handler(loggers, handler)
 
 
 @contextmanager
@@ -170,38 +217,51 @@ def _colorize_line(line):
         return f'<span class="log-info">{line}</span>'
 
 
-def render_log_sidebar_toggle():
-    """Render a small checkbox in the sidebar to toggle log viewer visibility."""
+@st.dialog("📟 로그 히스토리", width="large")
+def _show_log_dialog():
+    """Dialog popup showing full log history in terminal style."""
     buf = _get_log_buffer()
-    count = f" ({len(buf)})" if buf else ""
-    st.sidebar.checkbox(f"📟 로그{count}", key="_log_visible", value=False)
+    if not buf:
+        st.caption("아직 로그가 없습니다. 데이터 수집이나 예측을 실행하면 여기에 표시됩니다.")
+        return
+
+    colored_lines = [_colorize_line(line) for line in buf]
+    html = (
+        _TERMINAL_CSS
+        + '<div class="log-terminal">'
+        + "\n".join(colored_lines)
+        + "</div>"
+    )
+    st.html(html)
+
+    if st.button("🗑️ 로그 지우기", key="_log_clear_btn", use_container_width=True):
+        st.session_state[_LOG_BUFFER_KEY] = []
+        st.rerun()
+
+
+def render_log_sidebar_toggle():
+    """Render log controls in sidebar: inline log toggle + history dialog button."""
+    if '_inline_log_enabled' not in st.session_state:
+        st.session_state['_inline_log_enabled'] = False
+
+    is_on = st.session_state['_inline_log_enabled']
+    col_rt, col_hist = st.sidebar.columns(2)
+    with col_rt:
+        if st.button(
+            "📟 실시간 ON" if is_on else "📟 실시간 OFF",
+            type="primary" if is_on else "secondary",
+            use_container_width=True,
+            help="활성화 시 API 호출 결과를 실시간으로 표시합니다.",
+        ):
+            st.session_state['_inline_log_enabled'] = not is_on
+            st.rerun()
+    with col_hist:
+        buf = _get_log_buffer()
+        count = f" ({len(buf)})" if buf else ""
+        if st.button(f"📟 히스토리{count}", use_container_width=True):
+            _show_log_dialog()
 
 
 def render_log_viewer():
-    """
-    Render a mini-terminal log viewer as a main-area expander.
-    Only shown when the sidebar checkbox is checked.
-    """
-    if not st.session_state.get("_log_visible", False):
-        return
-
-    buf = _get_log_buffer()
-    label = f"📟 실행 로그 ({len(buf)}건)" if buf else "📟 실행 로그"
-
-    with st.expander(label, expanded=True):
-        if not buf:
-            st.caption("아직 로그가 없습니다. 데이터 수집이나 예측을 실행하면 여기에 표시됩니다.")
-            return
-
-        colored_lines = [_colorize_line(line) for line in buf]
-        html = (
-            _TERMINAL_CSS
-            + '<div class="log-terminal">'
-            + "\n".join(colored_lines)
-            + "</div>"
-        )
-        st.html(html)
-
-        if st.button("🗑️ 로그 지우기", key="_log_clear_btn", use_container_width=True):
-            st.session_state[_LOG_BUFFER_KEY] = []
-            st.rerun()
+    """Legacy no-op — log viewer is now a dialog from the sidebar."""
+    pass
