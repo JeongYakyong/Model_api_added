@@ -1079,10 +1079,32 @@ elif menu == "Option D : 예측 정확도 검증":
         return label
 
     # --- Tab 1: 일간 비교 ---
-    with tab1:     
-        default_val_date = st.session_state.get('last_predicted_date', datetime.now().date() - timedelta(days=1))
-        target_date = st.date_input("비교할 날짜를 선택하세요", default_val_date, key="val_daily_date")
-        
+    with tab1:
+        # 💡 session_state에서 마지막 예측 날짜를 기본값으로 사용
+        if 'full_val_date' not in st.session_state:
+            st.session_state['full_val_date'] = st.session_state.get('last_predicted_date', datetime.now().date() - timedelta(days=1))
+
+        # ── 날짜 네비게이션 — 한 줄 ──
+        col_prev, col_date, col_next = st.columns([0.3, 1, 0.3])
+
+        with col_prev:
+            if st.button("＜", width='stretch', key="val_btn_prev_day", help="이전 날짜"):
+                cur = st.session_state.get('full_val_date', datetime.now().date() - timedelta(days=1))
+                st.session_state['full_val_date'] = cur - timedelta(days=1)
+                st.rerun()
+        with col_next:
+            if st.button("＞", width='stretch', key="val_btn_next_day", help="다음 날짜"):
+                cur = st.session_state.get('full_val_date', datetime.now().date() - timedelta(days=1))
+                st.session_state['full_val_date'] = cur + timedelta(days=1)
+                st.rerun()
+
+        with col_date:
+            target_date = st.date_input(
+                "비교할 날짜",
+                key="full_val_date",
+                label_visibility="collapsed"
+            )
+
         val_df = merge_actual_and_forecast(db, f"{target_date} 00:00:00", f"{target_date} 23:59:59")
         
         if val_df.empty:
