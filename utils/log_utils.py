@@ -65,12 +65,14 @@ class _InlineHandler(logging.Handler):
         self._container = container
 
     def emit(self, record):
+        if not hasattr(threading.current_thread(), "streamlit_script_run_ctx"):
+            return  # worker thread — writing to the container would raise "missing ScriptRunContext"
         try:
             msg = self.format(record)
             ts = datetime.now().strftime("%H:%M:%S")
             self._container.text(f"[{ts}] {record.levelname:7s} | {msg}")
         except Exception:
-            pass  # worker thread or closed container
+            pass  # closed container
 
 
 def _attach_handler():
@@ -245,21 +247,19 @@ def render_log_sidebar_toggle():
         st.session_state['_inline_log_enabled'] = False
 
     is_on = st.session_state['_inline_log_enabled']
-    col_rt, col_hist = st.sidebar.columns(2)
-    with col_rt:
-        if st.button(
-            "📟 실시간 ON" if is_on else "📟 실시간 OFF",
-            type="primary" if is_on else "secondary",
-            use_container_width=True,
-            help="활성화 시 API 호출 결과를 실시간으로 표시합니다.",
-        ):
-            st.session_state['_inline_log_enabled'] = not is_on
-            st.rerun()
-    with col_hist:
-        buf = _get_log_buffer()
-        count = f" ({len(buf)})" if buf else ""
-        if st.button(f"📟 히스토리{count}", use_container_width=True):
-            _show_log_dialog()
+    st.sidebar.caption("로그설정")
+    if st.sidebar.button(
+        "📟 실시간 로그 ON" if is_on else "📟 실시간 로그 OFF",
+        type="primary" if is_on else "secondary",
+        use_container_width=True,
+        help="활성화 시 API 호출 결과를 실시간으로 표시합니다.",
+    ):
+        st.session_state['_inline_log_enabled'] = not is_on
+        st.rerun()
+    buf = _get_log_buffer()
+    count = f" ({len(buf)})" if buf else ""
+    if st.sidebar.button(f"📟 로그 히스토리{count}", use_container_width=True):
+        _show_log_dialog()
 
 
 def render_log_viewer():
