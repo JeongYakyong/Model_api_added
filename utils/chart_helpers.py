@@ -334,74 +334,99 @@ def init_warning_state():
 
 def draw_warning_zones(fig, df, smp_col=None):
     """
-    예측 차트에 경고 음영을 일괄 표시.
+    예측 차트에 경고 음영을 일괄 표시 (우선순위 기반 상호배타 마스크).
 
-    - 저발전 (기본 ON, gold)      : est_net_demand < warn_low
-    - 고발전 (기본 ON, blue)      : est_net_demand > warn_high
-    - 최저발전 (기본 ON, red)     : est_net_demand < warn_min  OR  smp < SMP_MIN_THRESHOLD
-    - 최대발전 (기본 OFF, purple) : est_net_demand > warn_max
-    - 심야 저부하 (기본 ON, darkorange) : hour < 6 AND est_net_demand < warn_overnight
+    우선순위 (높음→낮음): Min > Max > Overnight > Low/High.
+    각 시각은 활성화된 가장 높은 우선순위의 경고 한 개만 표시됩니다.
+
+    - 최저발전 (기본 ON, red)          : est_net_demand < warn_min  OR  smp < SMP_MIN_THRESHOLD
+    - 최대발전 (기본 OFF, purple)      : est_net_demand > warn_max
+    - 심야 저부하 (기본 ON, darkorange): hour < 6  AND est_net_demand < warn_overnight
+    - 저발전 (기본 ON, gold)           : est_net_demand < warn_low
+    - 고발전 (기본 ON, blue)           : est_net_demand > warn_high
     """
+    init_warning_state()  # idempotent — ensures session_state defaults exist
+
     if 'est_net_demand' not in df.columns:
         return
 
     nd = df['est_net_demand']
+    false_mask = pd.Series(False, index=df.index)
 
-    draw_danger_zones(fig, df, nd < st.session_state['warn_low'],
-                      'gold', annotation_text='LNG 저발전 구간',
-                      show_legend_label='저발전 경고🚨',
-                      layer_pos='below', fill_opacity=0.15)
-    draw_danger_zones(fig, df, nd > st.session_state['warn_high'],
-                      'blue', annotation_text='LNG 고발전 구간',
-                      show_legend_label='고발전 경고🚨',
-                      layer_pos='below', fill_opacity=0.15)
+    # ── 원본 조건 ──
+    low_raw  = nd < st.session_state.get('warn_low',  _WARN_DEFAULTS['warn_low'])
+    high_raw = nd > st.session_state.get('warn_high', _WARN_DEFAULTS['warn_high'])
 
-    if st.session_state.get('warn_min_enabled', True):
-        cond = nd < st.session_state['warn_min']
+    min_raw = false_mask
+    if st.session_state.get('warn_min_enabled', _WARN_DEFAULTS['warn_min_enabled']):
+        min_raw = nd < st.session_state.get('warn_min', _WARN_DEFAULTS['warn_min'])
         if smp_col and smp_col in df.columns:
-            cond = cond | (df[smp_col] < SMP_MIN_THRESHOLD)
-        draw_danger_zones(fig, df, cond, 'red',
-                          annotation_text=' ',
-                          show_legend_label='최저발전 경고🚨',
-                          layer_pos='above', fill_opacity=0.3)
+            min_raw = min_raw | (df[smp_col] < SMP_MIN_THRESHOLD)
 
-    if st.session_state.get('warn_max_enabled', False):
-        draw_danger_zones(fig, df, nd > st.session_state['warn_max'],
-                          'purple',
-                          annotation_text=' ',
-                          show_legend_label='최대발전 경고🚨',
-                          layer_pos='above', fill_opacity=0.3)
+    max_raw = false_mask
+    if st.session_state.get('warn_max_enabled', _WARN_DEFAULTS['warn_max_enabled']):
+        max_raw = nd > st.session_state.get('warn_max', _WARN_DEFAULTS['warn_max'])
 
-    if st.session_state.get('warn_overnight_enabled', True):
-        overnight_mask = pd.Series(df.index.hour < OVERNIGHT_END_HOUR, index=df.index)
-        draw_danger_zones(fig, df,
-                          overnight_mask & (nd < st.session_state['warn_overnight']),
-                          'darkorange',
-                          annotation_text=' ',
-                          show_legend_label='심야 저부하 경고🚨',
-                          layer_pos='above', fill_opacity=0.25)
+    overnight_raw = false_mask
+    if st.session_state.get('warn_overnight_enabled', _WARN_DEFAULTS['warn_overnight_enabled']):
+        hour_mask = pd.Series(df.index.hour < OVERNIGHT_END_HOUR, index=df.index)
+        overnight_raw = hour_mask & (nd < st.session_state.get('warn_overnight',
+                                                                _WARN_DEFAULTS['warn_overnight']))
+
+    # ── 우선순위 배타 처리 ──
+    min_mask       = min_raw
+    max_mask       = max_raw       & ~min_mask
+    overnight_mask = overnight_raw & ~(min_mask | max_mask)
+    priority_mask  = min_mask | max_mask | overnight_mask
+    low_mask       = low_raw  & ~priority_mask
+    high_mask      = high_raw & ~priority_mask
+
+    # ── 렌더 (모두 below 레이어, 동일 투명도) ──
+    opacity = 0.25
+    draw_danger_zones(fig, df, low_mask, 'gold',
+                      annotation_text='LNG 저발전 구간',
+                      show_legend_label='저발전 경고🚨',
+                      layer_pos='below', fill_opacity=opacity)
+    draw_danger_zones(fig, df, high_mask, 'blue',
+                      annotation_text='LNG 고발전 구간',
+                      show_legend_label='고발전 경고🚨',
+                      layer_pos='below', fill_opacity=opacity)
+    draw_danger_zones(fig, df, overnight_mask, 'darkorange',
+                      annotation_text=' ',
+                      show_legend_label='심야 저부하 경고🚨',
+                      layer_pos='below', fill_opacity=opacity)
+    draw_danger_zones(fig, df, max_mask, 'purple',
+                      annotation_text=' ',
+                      show_legend_label='최대발전 경고🚨',
+                      layer_pos='below', fill_opacity=opacity)
+    draw_danger_zones(fig, df, min_mask, 'red',
+                      annotation_text=' ',
+                      show_legend_label='최저발전 경고🚨',
+                      layer_pos='below', fill_opacity=opacity)
 
 
 def render_warning_settings(expanded=False):
     """경고 임계값 설정 expander (lite/full 공통)."""
+    init_warning_state()  # idempotent — ensures keys exist before widgets bind
     with st.expander("⚠️ 경고 임계값 설정", expanded=expanded):
         c1, c2 = st.columns(2)
         with c1:
             st.number_input("🟡 저발전 경고 (MW)", step=10, key='warn_low')
             st.number_input("🔵 고발전 경고 (MW)", step=10, key='warn_high')
             st.checkbox("🌙 심야 저부하 경고 활성화 (00-06시)", key='warn_overnight_enabled')
-            if st.session_state['warn_overnight_enabled']:
+            if st.session_state.get('warn_overnight_enabled', True):
                 st.number_input("심야 순부하 임계값 (MW)", step=10, key='warn_overnight')
         with c2:
             st.checkbox("🔴 최저발전 경고 활성화", key='warn_min_enabled')
-            if st.session_state['warn_min_enabled']:
+            if st.session_state.get('warn_min_enabled', True):
                 st.number_input("최저 순부하 임계값 (MW)", step=10, key='warn_min')
             st.checkbox("🟣 최대발전 경고 활성화", key='warn_max_enabled')
-            if st.session_state['warn_max_enabled']:
+            if st.session_state.get('warn_max_enabled', False):
                 st.number_input("최대 순부하 임계값 (MW)", step=10, key='warn_max')
         st.caption(
-            f"💡 최저발전 경고: est_net_demand < 최저 순부하 임계값 **또는** SMP < {SMP_MIN_THRESHOLD} (하드코딩) · "
-            f"심야 저부하 경고: 00-06시 중 est_net_demand < 심야 순부하 임계값"
+            f"💡 우선순위: Min > Max > Overnight > Low/High (동일 시각엔 최우선 경고만 표시) · "
+            f"Min 조건: est_net_demand < 임계값 **또는** SMP < {SMP_MIN_THRESHOLD}원(하드코딩) · "
+            f"Overnight 조건: 00-06시 중 est_net_demand < 임계값"
         )
 
 
