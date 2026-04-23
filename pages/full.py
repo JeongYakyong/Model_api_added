@@ -29,8 +29,10 @@ from models.architecture import PatchTST_Weather_Model
 from utils.chart_helpers import (
     EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, COLORS,
     check_data_status, date_range_selector,
-    merge_actual_and_forecast, plot_actual_vs_pred, draw_danger_zones,
+    merge_actual_and_forecast, plot_actual_vs_pred,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
+    init_warning_state, draw_warning_zones,
+    render_warning_settings, style_net_demand_warnings,
 )
 from utils.gemini import (
     generate_energy_narrative,
@@ -756,20 +758,7 @@ elif menu == "Option C : 예측 결과 시각화":
         # ── session_state 초기화 ──
         if 'vis_selected_vars' not in st.session_state:
             st.session_state['vis_selected_vars'] = ['est_demand', 'est_net_demand', 'est_solar_gen', 'est_wind_gen']
-        if 'vis_warn_low' not in st.session_state:
-            st.session_state['vis_warn_low'] = 250
-        if 'vis_warn_high' not in st.session_state:
-            st.session_state['vis_warn_high'] = 750
-        if 'vis_smp_low' not in st.session_state:
-            st.session_state['vis_smp_low'] = 10
-        if 'vis_warn_min_enabled' not in st.session_state:
-            st.session_state['vis_warn_min_enabled'] = False
-        if 'vis_warn_min' not in st.session_state:
-            st.session_state['vis_warn_min'] = 150
-        if 'vis_warn_max_enabled' not in st.session_state:
-            st.session_state['vis_warn_max_enabled'] = False
-        if 'vis_warn_max' not in st.session_state:
-            st.session_state['vis_warn_max'] = 900
+        init_warning_state()
         if 'vis_show_actual' not in st.session_state:
             st.session_state['vis_show_actual'] = False
         if 'vis_actual_cols' not in st.session_state:
@@ -842,9 +831,8 @@ elif menu == "Option C : 예측 결과 시각화":
 
         # 설정값 로드
         selected_vars = st.session_state['vis_selected_vars']
-        warning_threshold = st.session_state['vis_warn_low']
-        warning_threshold2 = st.session_state['vis_warn_high']
-        smp_threshold = st.session_state['vis_smp_low'] if smp_col else 0
+        warning_threshold = st.session_state['warn_low']
+        warning_threshold2 = st.session_state['warn_high']
 
         # --- Tab 1: 시각화 차트 ---
         with tab_chart:
@@ -914,29 +902,7 @@ elif menu == "Option C : 예측 결과 시각화":
                     )
                 
                 # --- 경고 음영 ---
-                low_gen_condition = df['est_net_demand'] < warning_threshold
-                if smp_col and smp_col in df.columns:
-                    low_gen_condition = low_gen_condition | (df[smp_col] < smp_threshold)
-                    
-                draw_danger_zones(fig, df, low_gen_condition, "red", "LNG 저발전 경고🚨", layer_pos="below", fill_opacity=0.15)
-                draw_danger_zones(fig, df, df['est_net_demand'] > warning_threshold2, "blue", "LNG 고발전 경고🚨", layer_pos="below", fill_opacity=0.15)
-                
-                if st.session_state.get('vis_warn_min_enabled', False):
-                    draw_danger_zones(
-                        fig, df,
-                        df['est_net_demand'] < st.session_state['vis_warn_min'],
-                        "purple", annotation_text=" ",
-                        show_legend_label="최저발전구간",
-                        layer_pos="above", fill_opacity=0.3
-                    )
-                if st.session_state.get('vis_warn_max_enabled', False):
-                    draw_danger_zones(
-                        fig, df,
-                        df['est_net_demand'] > st.session_state['vis_warn_max'],
-                        "brown", annotation_text=" ",
-                        show_legend_label="최대발전구간",
-                        layer_pos="above", fill_opacity=0.3
-                    )
+                draw_warning_zones(fig, df, smp_col)
                 
                 fig.update_layout(
                     title=f"{target_date} 전력수급 및 재생에너지 예측 결과" + (" (실측 오버레이)" if overlay_active else ""),
@@ -955,46 +921,13 @@ elif menu == "Option C : 예측 결과 시각화":
 
             st.caption("순부하(net_demand) : 전체 부하에서 신재생발전을 제외한 내연 발전기 및 연계선이 담당해야 할 총 전력부하로 전력거래소에서 판단하여 제어.")
         
-            render_briefing_expander(df, warning_threshold, warning_threshold2, smp_threshold,
+            render_briefing_expander(df, warning_threshold, warning_threshold2,
                                      target_date, btn_key="full_btn_ai_briefing",
                                      title="AI 예측 브리핑")
                     
 
-            # ── 차트 아래: 경고 기준 설정 (expander, 기본 접힘) ──
-            with st.expander("🚨 경고 기준 설정", expanded=False):
-                st.caption("est_net_demand 기준으로 위험 구간을 음영 처리합니다.")
-                warn_col1, warn_col2, warn_col3 = st.columns(3)
-                with warn_col1:
-                    w_low = st.number_input("🔴 저발전 경고 (MW)", value=st.session_state['vis_warn_low'], step=10, key='vis_warn_low_input')
-                    st.session_state['vis_warn_low'] = w_low
-                with warn_col2:
-                    w_high = st.number_input("🔵 고발전 경고 (MW)", value=st.session_state['vis_warn_high'], step=10, key='vis_warn_high_input')
-                    st.session_state['vis_warn_high'] = w_high
-                with warn_col3:
-                    if smp_col:
-                        w_smp = st.number_input("🟡 SMP 하한 (원)", value=st.session_state['vis_smp_low'], step=10, key='vis_smp_low_input')
-                        st.session_state['vis_smp_low'] = w_smp
-                    else:
-                        st.info("SMP 데이터가 없습니다.")
-                
-                st.caption("💡 저발전 경고: est_net_demand < 저발전 임계값 **또는** SMP < SMP 하한일 때 발동됩니다.")
-                
-                st.markdown("---")
-                st.write("**추가 경고 (선택)**")
-                
-                extra_col1, extra_col2 = st.columns(2)
-                with extra_col1:
-                    warn_min_on = st.checkbox("🟣 최저발전 경고 활성화", value=st.session_state['vis_warn_min_enabled'], key='vis_warn_min_cb')
-                    st.session_state['vis_warn_min_enabled'] = warn_min_on
-                    if warn_min_on:
-                        warn_min_val = st.number_input("최저발전 임계값 (MW)", value=st.session_state['vis_warn_min'], step=10, key='vis_warn_min_input')
-                        st.session_state['vis_warn_min'] = warn_min_val
-                with extra_col2:
-                    warn_max_on = st.checkbox("🟤 최대발전 경고 활성화", value=st.session_state['vis_warn_max_enabled'], key='vis_warn_max_cb')
-                    st.session_state['vis_warn_max_enabled'] = warn_max_on
-                    if warn_max_on:
-                        warn_max_val = st.number_input("최대발전 임계값 (MW)", value=st.session_state['vis_warn_max'], step=10, key='vis_warn_max_input')
-                        st.session_state['vis_warn_max'] = warn_max_val
+            # ── 차트 아래: 경고 기준 설정 ──
+            render_warning_settings(expanded=False)
         
         # --- Tab 2: 데이터 테이블 ---
         with tab_table:
@@ -1004,17 +937,7 @@ elif menu == "Option C : 예측 결과 시각화":
             if smp_col: display_cols.append(smp_col)
             display_cols = [c for c in display_cols if c in df.columns]
             
-            def highlight_warnings(row):
-                styles = [''] * len(row)
-                if 'est_net_demand' in row.index and row['est_net_demand'] < warning_threshold:
-                    idx = row.index.get_loc('est_net_demand')
-                    styles[idx] = 'background-color: #ffcccc'
-                if smp_col and smp_col in row.index and row[smp_col] < smp_threshold:
-                    idx = row.index.get_loc(smp_col)
-                    styles[idx] = 'background-color: #ffe5b4'
-                return styles
-
-            st.dataframe(df[display_cols].style.apply(highlight_warnings, axis=1).format(precision=2), width="stretch")
+            st.dataframe(df[display_cols].style.apply(style_net_demand_warnings, axis=1).format(precision=2), width="stretch")
             
     pass
 

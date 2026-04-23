@@ -5,6 +5,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+from utils.chart_helpers import SMP_MIN_THRESHOLD
+
 load_dotenv()
 
 
@@ -33,7 +35,7 @@ def save_briefing_to_file(date_key, text):
     except Exception as e:
         print(f"File save error: {e}")
 
-def render_briefing_expander(df, warn_low, warn_high, smp_threshold, vis_date,
+def render_briefing_expander(df, warn_low, warn_high, vis_date,
                               btn_key="btn_ai_briefing", title="✨ AI 예측 브리핑"):
     """AI 예측 브리핑 expander를 렌더링합니다."""
     with st.expander(title, expanded=True):
@@ -50,7 +52,6 @@ def render_briefing_expander(df, warn_low, warn_high, smp_threshold, vis_date,
                     df=df,
                     warn_low=warn_low,
                     warn_high=warn_high,
-                    smp_threshold=smp_threshold
                 )
                 save_briefing_to_file(date_key, briefing_text)
                 st.session_state['lite_briefings_storage'][date_key] = briefing_text
@@ -81,7 +82,7 @@ def _time_block_summary(df, col):
     return " → ".join(parts) if parts else "데이터 없음"
 
 
-def _detect_risks(df, warn_low, warn_high, smp_threshold):
+def _detect_risks(df, warn_low, warn_high):
     """임계치 위반 시간대 추출 — LLM 대신 코드에서 확정"""
     events = []
 
@@ -99,18 +100,32 @@ def _detect_risks(df, warn_low, warn_high, smp_threshold):
                 f"최대 {high['est_net_demand'].max():.0f}MW ({len(high)}시간)"
             )
 
-    if 'smp_jeju' in df.columns:
-        smp_low = df[df['smp_jeju'] <= smp_threshold]
-        if not smp_low.empty:
-            events.append(
-                f"SMP 하락: {smp_low.index.hour.min():02d}~{smp_low.index.hour.max():02d}시, "
-                f"최저 {smp_low['smp_jeju'].min():.1f}원 ({len(smp_low)}시간)"
-            )
+        if st.session_state.get('warn_min_enabled', True):
+            warn_min = st.session_state.get('warn_min', 100)
+            cond = df['est_net_demand'] < warn_min
+            if 'smp_jeju' in df.columns:
+                cond = cond | (df['smp_jeju'] < SMP_MIN_THRESHOLD)
+            mn = df[cond]
+            if not mn.empty:
+                events.append(
+                    f"최저발전 경고: {mn.index.hour.min():02d}~{mn.index.hour.max():02d}시, "
+                    f"최저 순부하 {mn['est_net_demand'].min():.0f}MW ({len(mn)}시간, "
+                    f"임계 {warn_min}MW 또는 SMP<{SMP_MIN_THRESHOLD}원)"
+                )
+
+        if st.session_state.get('warn_overnight_enabled', True):
+            warn_overnight = st.session_state.get('warn_overnight', 300)
+            overnight = df[(df.index.hour < 6) & (df['est_net_demand'] < warn_overnight)]
+            if not overnight.empty:
+                events.append(
+                    f"심야 저부하(00-06시): {overnight.index.hour.min():02d}~{overnight.index.hour.max():02d}시, "
+                    f"최저 {overnight['est_net_demand'].min():.0f}MW ({len(overnight)}시간, 임계 {warn_overnight}MW)"
+                )
 
     return events
 
 
-def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
+def generate_energy_narrative(df, warn_low, warn_high):
     if not os.getenv("GEMINI_API_KEY"):
         return "Gemini API key is missing."
 
@@ -158,7 +173,7 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
  #           clip_info = ""
 
         # ── 리스크 감지 (코드 확정) ──
-        risks = _detect_risks(df, warn_low, warn_high, smp_threshold)
+        risks = _detect_risks(df, warn_low, warn_high)
         #if solar_clipped:
         #    risks.append(
         #        f"저일사 후처리: 일 최대 일사량 {max_solar_rad:.2f} MJ/m2, "
@@ -183,7 +198,7 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
 - 이용률: 태양광 {avg_solar_util:.2%}, 풍력 {avg_wind_util:.2%}
 - 순부하: 최저 {min_net:.1f}MW, 최대 {max_net:.1f}MW
 - 시간대별 순부하: {net_flow}
-- 임계치: 저부하 {warn_low}MW, 고부하 {warn_high}MW, SMP {smp_threshold}원
+- 임계치: 저부하 {warn_low}MW, 고부하 {warn_high}MW, 최저발전 {st.session_state.get('warn_min', 100)}MW (또는 SMP<{SMP_MIN_THRESHOLD}원), 심야(00-06) {st.session_state.get('warn_overnight', 300)}MW
 
 [감지된 리스크]
 {risk_str}
@@ -195,10 +210,10 @@ def generate_energy_narrative(df, warn_low, warn_high, smp_threshold):
 4. 강수가 0보다 크면 강수 시간대와 예측 정확도 저하 가능성 언급.
 5. 셋째~넷째 항목: [감지된 리스크]에 기반한 주간(오전, 오후) LNG 운영 방향.
    - 저부하 → "순부하 감소로 LNG 발전 정지 가능성"
-   -  SMP 하락 → "(-) SMP로 태양광 발전량 최대 예상"
-   -  고부하 → "순부하 증가로 LNG 발전량 증가 예상"
-   -  정상 → "LNG 발전 운영 안정적 유지 전망"
-6. 다섯번째 항목 : [감지된 리스크]와 시간대별 순부하에 기반한 야간 LNG 운영 방향.
+   - 최저발전 경고(순부하 < 최저 임계 또는 SMP 하락) → "(-) SMP 또는 저순부하로 LNG 정지·태양광 최대 발전 예상"
+   - 고부하 → "순부하 증가로 LNG 발전량 증가 예상"
+   - 정상 → "LNG 발전 운영 안정적 유지 전망"
+6. 다섯번째 항목 : [감지된 리스크]와 시간대별 순부하에 기반한 심야(00-06) 및 야간(18-23) LNG 운영 방향 (심야 저부하 감지 시 LNG 정지/최소 출력 유지 검토 명시, 미 감지시 생략).
 7. "~입니다", "~습니다" 경어체.
 """
 #7. 여섯번째 항목 : 저일사 후처리가 적용된 경우에만 해당, 둘째 항목에 "저일사 후처리 적용(최대 N%)" 문구를 반드시 포함.

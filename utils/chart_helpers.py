@@ -305,3 +305,115 @@ def plot_actual_vs_pred(df, date_title, radio_key):
     )
     fig.update_traces(hovertemplate='%{y:,.1f}')
     st.plotly_chart(fig, width="stretch")
+
+
+# ==========================================
+# 경고/위험 구간 공용 헬퍼 (lite.py / full.py 공통)
+# ==========================================
+SMP_MIN_THRESHOLD = 10
+
+_WARN_DEFAULTS = {
+    'warn_low':               250,
+    'warn_high':              750,
+    'warn_min_enabled':       True,
+    'warn_min':               100,
+    'warn_max_enabled':       False,
+    'warn_max':               900,
+    'warn_overnight_enabled': True,
+    'warn_overnight':         300,
+}
+
+OVERNIGHT_END_HOUR = 6   # 심야 경고 적용 구간: hour < OVERNIGHT_END_HOUR (00:00 ~ 05:59)
+
+
+def init_warning_state():
+    """페이지 진입 시 경고 임계값 session_state 기본값 초기화 (shared across pages)."""
+    for k, v in _WARN_DEFAULTS.items():
+        st.session_state.setdefault(k, v)
+
+
+def draw_warning_zones(fig, df, smp_col=None):
+    """
+    예측 차트에 경고 음영을 일괄 표시.
+
+    - 저발전 (기본 ON, gold)      : est_net_demand < warn_low
+    - 고발전 (기본 ON, blue)      : est_net_demand > warn_high
+    - 최저발전 (기본 ON, red)     : est_net_demand < warn_min  OR  smp < SMP_MIN_THRESHOLD
+    - 최대발전 (기본 OFF, purple) : est_net_demand > warn_max
+    - 심야 저부하 (기본 ON, darkorange) : hour < 6 AND est_net_demand < warn_overnight
+    """
+    if 'est_net_demand' not in df.columns:
+        return
+
+    nd = df['est_net_demand']
+
+    draw_danger_zones(fig, df, nd < st.session_state['warn_low'],
+                      'gold', annotation_text='LNG 저발전 구간',
+                      show_legend_label='저발전 경고🚨',
+                      layer_pos='below', fill_opacity=0.15)
+    draw_danger_zones(fig, df, nd > st.session_state['warn_high'],
+                      'blue', annotation_text='LNG 고발전 구간',
+                      show_legend_label='고발전 경고🚨',
+                      layer_pos='below', fill_opacity=0.15)
+
+    if st.session_state.get('warn_min_enabled', True):
+        cond = nd < st.session_state['warn_min']
+        if smp_col and smp_col in df.columns:
+            cond = cond | (df[smp_col] < SMP_MIN_THRESHOLD)
+        draw_danger_zones(fig, df, cond, 'red',
+                          annotation_text=' ',
+                          show_legend_label='최저발전 경고🚨',
+                          layer_pos='above', fill_opacity=0.3)
+
+    if st.session_state.get('warn_max_enabled', False):
+        draw_danger_zones(fig, df, nd > st.session_state['warn_max'],
+                          'purple',
+                          annotation_text=' ',
+                          show_legend_label='최대발전 경고🚨',
+                          layer_pos='above', fill_opacity=0.3)
+
+    if st.session_state.get('warn_overnight_enabled', True):
+        overnight_mask = pd.Series(df.index.hour < OVERNIGHT_END_HOUR, index=df.index)
+        draw_danger_zones(fig, df,
+                          overnight_mask & (nd < st.session_state['warn_overnight']),
+                          'darkorange',
+                          annotation_text=' ',
+                          show_legend_label='심야 저부하 경고🚨',
+                          layer_pos='above', fill_opacity=0.25)
+
+
+def render_warning_settings(expanded=False):
+    """경고 임계값 설정 expander (lite/full 공통)."""
+    with st.expander("⚠️ 경고 임계값 설정", expanded=expanded):
+        c1, c2 = st.columns(2)
+        with c1:
+            st.number_input("🟡 저발전 경고 (MW)", step=10, key='warn_low')
+            st.number_input("🔵 고발전 경고 (MW)", step=10, key='warn_high')
+            st.checkbox("🌙 심야 저부하 경고 활성화 (00-06시)", key='warn_overnight_enabled')
+            if st.session_state['warn_overnight_enabled']:
+                st.number_input("심야 순부하 임계값 (MW)", step=10, key='warn_overnight')
+        with c2:
+            st.checkbox("🔴 최저발전 경고 활성화", key='warn_min_enabled')
+            if st.session_state['warn_min_enabled']:
+                st.number_input("최저 순부하 임계값 (MW)", step=10, key='warn_min')
+            st.checkbox("🟣 최대발전 경고 활성화", key='warn_max_enabled')
+            if st.session_state['warn_max_enabled']:
+                st.number_input("최대 순부하 임계값 (MW)", step=10, key='warn_max')
+        st.caption(
+            f"💡 최저발전 경고: est_net_demand < 최저 순부하 임계값 **또는** SMP < {SMP_MIN_THRESHOLD} (하드코딩) · "
+            f"심야 저부하 경고: 00-06시 중 est_net_demand < 심야 순부하 임계값"
+        )
+
+
+def style_net_demand_warnings(row):
+    """데이터 테이블에서 est_net_demand 셀 배경색 하이라이트 (저=red, 고=blue)."""
+    styles = [''] * len(row)
+    if 'est_net_demand' in row.index:
+        nd = row['est_net_demand']
+        if pd.notna(nd):
+            idx = row.index.get_loc('est_net_demand')
+            if nd < st.session_state.get('warn_low', _WARN_DEFAULTS['warn_low']):
+                styles[idx] = 'background-color: lightcoral'
+            elif nd > st.session_state.get('warn_high', _WARN_DEFAULTS['warn_high']):
+                styles[idx] = 'background-color: lightblue'
+    return styles

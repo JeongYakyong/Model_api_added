@@ -20,8 +20,10 @@ from utils.data_pipeline import (
 from utils.api_fetchers import fetch_kpx_past_15min
 from utils.chart_helpers import (
     EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, COLORS,
-    merge_actual_and_forecast, draw_danger_zones,
+    merge_actual_and_forecast,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
+    init_warning_state, draw_warning_zones,
+    render_warning_settings, style_net_demand_warnings,
 )
 from utils.gemini import (
     generate_energy_narrative,
@@ -181,17 +183,11 @@ if lite_menu == "📈 예측 확인":
         'lite_vis_vars':    ['est_demand', 'est_net_demand', 'est_solar_gen', 'est_wind_gen'],
         'lite_vis_actual':  ['real_demand', 'real_solar_gen', 'real_wind_gen', 'real_net_demand'],
         'lite_show_actual': False,
-        'lite_warn_low':    250,
-        'lite_warn_high':   750,
-        'lite_smp_low':     10,
-        'lite_warn_min_enabled': False,
-        'lite_warn_min':    150,
-        'lite_warn_max_enabled': False,
-        'lite_warn_max':    900,
     }
     for k, v in ss_defaults.items():
         if k not in st.session_state:
             st.session_state[k] = v
+    init_warning_state()
 
     # ── 날짜 / 표시항목 / 오버레이 / 오늘예측 — 한 줄 ──
     col_prev, col_date, col_next, col_btn, col_overlay, col_today = st.columns([0.3, 1, 0.3, 1, 1, 1])
@@ -339,9 +335,8 @@ if lite_menu == "📈 예측 확인":
         selected_vars   = st.session_state['lite_vis_vars']
         selected_actual = st.session_state['lite_vis_actual']
         show_actual     = st.session_state.get('lite_show_actual', False)
-        warn_low        = st.session_state['lite_warn_low']
-        warn_high       = st.session_state['lite_warn_high']
-        smp_threshold   = st.session_state['lite_smp_low'] if smp_col else 0
+        warn_low        = st.session_state['warn_low']
+        warn_high       = st.session_state['warn_high']
 
         if not selected_vars:
             st.info("👉 [⚙️ 표시 항목] 버튼을 눌러 시각화할 데이터를 선택하세요.")
@@ -379,17 +374,7 @@ if lite_menu == "📈 예측 확인":
                         ))
 
             # 위험 구간 표시
-            if 'est_net_demand' in df.columns:
-                draw_danger_zones(fig, df, df['est_net_demand'] < warn_low,
-                                  'red', annotation_text='LNG 저발전 구간', show_legend_label='저발전 구간')
-                draw_danger_zones(fig, df, df['est_net_demand'] > warn_high,
-                                  'blue', annotation_text='LNG 고발전 구간', show_legend_label='고발전 구간')
-            if st.session_state.get('lite_warn_min_enabled') and 'est_renew_total' in df.columns:
-                draw_danger_zones(fig, df, df['est_renew_total'] < st.session_state['lite_warn_min'],
-                                  'brown', show_legend_label='최저발전 경고')
-            if st.session_state.get('lite_warn_max_enabled') and 'est_renew_total' in df.columns:
-                draw_danger_zones(fig, df, df['est_renew_total'] > st.session_state['lite_warn_max'],
-                                  'purple', show_legend_label='최대발전 경고')
+            draw_warning_zones(fig, df, smp_col)
 
             # 현재시각 세로선
             now = datetime.now()
@@ -408,50 +393,17 @@ if lite_menu == "📈 예측 확인":
             st.plotly_chart(fig, width="stretch")
             st.caption("매일 자정 이후 [🔮 바로 예측] 버튼을 눌러 예보 업데이트가 가능합니다. **LNG발전은 순부하(전력수요 - 신재생발전량)에 따라 제어되나 기력발전기 or 연계선의 정비로 실제보다 발전량이 증가할 수 있습니다.**")
 
-            render_briefing_expander(df, warn_low, warn_high, smp_threshold, vis_date,
+            render_briefing_expander(df, warn_low, warn_high, vis_date,
                                      btn_key="lite_btn_ai_briefing")
 
             # ── 경고 설정 expander ──
-            with st.expander("⚠️ 경고 임계값 설정", expanded=False):
-                ec1, ec2 = st.columns(2)
-                with ec1:
-                    st.number_input("저발전 임계값 (MW)", value=warn_low, step=10, key='lite_warn_low')
-                    st.number_input("고발전 임계값 (MW)", value=warn_high, step=10, key='lite_warn_high')
-                with ec2:
-                    st.checkbox("🟣 최저발전 경고", key='lite_warn_min_enabled')
-                    if st.session_state['lite_warn_min_enabled']:
-                        st.number_input("최저발전 임계값 (MW)", value=st.session_state['lite_warn_min'],
-                                        step=10, key='lite_warn_min_input')
-                        st.session_state['lite_warn_min'] = st.session_state.get('lite_warn_min_input',
-                                                                                  st.session_state['lite_warn_min'])
-                    st.checkbox("🟤 최대발전 경고", key='lite_warn_max_enabled')
-                    if st.session_state['lite_warn_max_enabled']:
-                        st.number_input("최대발전 임계값 (MW)", value=st.session_state['lite_warn_max'],
-                                        step=10, key='lite_warn_max_input')
-                        st.session_state['lite_warn_max'] = st.session_state.get('lite_warn_max_input',
-                                                                                  st.session_state['lite_warn_max'])
+            render_warning_settings(expanded=False)
 
             # ── 데이터 테이블 ──
             with st.expander("📋 데이터 테이블", expanded=False):
                 display_cols = [c for c in selected_vars if c in df.columns]
-                def highlight_warnings(row):
-                    styles = [''] * len(row)
-                    if 'est_net_demand' in row.index:
-                        nd = row['est_net_demand']
-                        if pd.notna(nd):
-                            idx = row.index.get_loc('est_net_demand')
-                            if nd < warn_low:
-                                styles[idx] = 'background-color: #cce5ff'
-                            elif nd > warn_high:
-                                styles[idx] = 'background-color: #f8d7da'
-                    if smp_col and smp_col in row.index:
-                        if pd.notna(row[smp_col]) and row[smp_col] < smp_threshold:
-                            idx = row.index.get_loc(smp_col)
-                            styles[idx] = 'background-color: #ffe5b4'
-                    return styles
-
                 st.dataframe(
-                    df[display_cols].style.apply(highlight_warnings, axis=1).format(precision=2),
+                    df[display_cols].style.apply(style_net_demand_warnings, axis=1).format(precision=2),
                     width="stretch"
                 )
 
