@@ -32,7 +32,8 @@ from utils.chart_helpers import (
     merge_actual_and_forecast, plot_actual_vs_pred,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
     init_warning_state, draw_warning_zones,
-    render_warning_settings, style_net_demand_warnings,
+    render_warning_threshold_inputs, commit_warning_thresholds,
+    style_net_demand_warnings,
 )
 from utils.gemini import (
     generate_energy_narrative,
@@ -773,15 +774,15 @@ elif menu == "Option C : 예측 결과 시각화":
         
         @st.dialog("📊 표시 항목 설정")
         def select_plot_items():
-            col1, col2 = st.columns(2)
-            
+            col1, col2, col3 = st.columns(3)
+
             with col1:
                 st.write("**예측 데이터**")
                 current_est = st.session_state.get('vis_selected_vars', [])
                 est_selections = {}
                 for key, label in plot_options.items():
                     est_selections[key] = st.checkbox(label, value=(key in current_est), key=f"dlg_est_{key}")
-            
+
             with col2:
                 st.write("**실측 데이터**")
                 if available_actual:
@@ -792,12 +793,17 @@ elif menu == "Option C : 예측 결과 시각화":
                 else:
                     st.caption("실측 데이터가 없습니다.")
                     act_selections = {}
-            
+
+            with col3:
+                st.write("**⚠️ 경고 임계값**")
+                threshold_vals = render_warning_threshold_inputs()
+
             st.markdown("---")
             if st.button("적용", type="primary", use_container_width=True):
                 st.session_state['vis_selected_vars'] = [k for k, v in est_selections.items() if v]
                 if available_actual:
                     st.session_state['vis_actual_cols'] = [k for k, v in act_selections.items() if v]
+                commit_warning_thresholds(threshold_vals)
                 st.rerun()
 
         # ── 상단 컨트롤: 표시 항목 / 오버레이 / 예측 이동 버튼 ──
@@ -926,9 +932,6 @@ elif menu == "Option C : 예측 결과 시각화":
                                      title="AI 예측 브리핑")
                     
 
-            # ── 차트 아래: 경고 기준 설정 ──
-            render_warning_settings(expanded=False)
-        
         # --- Tab 2: 데이터 테이블 ---
         with tab_table:
             st.subheader(f"{target_date} 상세 데이터")

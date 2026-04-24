@@ -46,7 +46,12 @@ def render_briefing_expander(df, warn_low, warn_high, vis_date,
 
         saved_briefing = st.session_state['lite_briefings_storage'].get(date_key)
 
-        if st.button("AI 브리핑 생성 / 갱신", key=btn_key):
+        col_btn, col_legend = st.columns([1, 2])
+        with col_btn:
+            do_generate = st.button("AI 브리핑 생성 / 갱신", key=btn_key)
+        with col_legend:
+            st.caption("시간대 구분 · 00-06 심야 · 06-12 오전 · 12-18 오후 · 18-23 야간")
+        if do_generate:
             with st.spinner("AI가 데이터를 분석하고 있습니다..."):
                 briefing_text = generate_energy_narrative(
                     df=df,
@@ -199,21 +204,26 @@ def generate_energy_narrative(df, warn_low, warn_high):
 - 순부하: 최저 {min_net:.1f}MW, 최대 {max_net:.1f}MW
 - 시간대별 순부하: {net_flow}
 - 임계치: 저부하 {warn_low}MW, 고부하 {warn_high}MW, 최저발전 {st.session_state.get('warn_min', 100)}MW (또는 SMP<{SMP_MIN_THRESHOLD}원), 심야(00-06) {st.session_state.get('warn_overnight', 300)}MW
+- 임계 교차 여부: 최저 순부하 {min_net:.1f}MW {"<" if min_net < warn_low else "≥"} 저부하 {warn_low}MW / 최대 순부하 {max_net:.1f}MW {">" if max_net > warn_high else "≤"} 고부하 {warn_high}MW
 
 [감지된 리스크]
 {risk_str}
 
 [작성 규칙]
+⚠ 절대 원칙: [감지된 리스크]에 명시된 이벤트만 언급하십시오. 거기에 없는 리스크(예: '고부하')를 평균·추세·증감으로부터 추론하거나 창작하지 마십시오. 해당 이벤트가 '정상 범위'면 반드시 '정상'으로만 서술하십시오.
+
 1. 최대 5줄, 각 항목 '•' 기호 + 두 번 줄바꿈(\\n\\n) 개조식.
 2. 첫 항목: 시간대별 기상 흐름 요약 ('오전 흐림→오후 비', '종일 맑고 바람 약함' 등 상태 위주).
 3. 둘째 항목: 태양광/풍력 이용률 동향.
 4. 강수가 0보다 크면 강수 시간대와 예측 정확도 저하 가능성 언급.
-5. 셋째~넷째 항목: [감지된 리스크]에 기반한 주간(오전, 오후) LNG 운영 방향.
-   - 저부하 → "순부하 감소로 LNG 발전 정지 가능성"
-   - 최저발전 경고(순부하 < 최저 임계 또는 SMP 하락) → "(-) SMP 또는 저순부하로 LNG 정지·태양광 최대 발전 예상"
-   - 고부하 → "순부하 증가로 LNG 발전량 증가 예상"
-   - 정상 → "LNG 발전 운영 안정적 유지 전망"
-6. 다섯번째 항목 : [감지된 리스크]와 시간대별 순부하에 기반한 심야(00-06) 및 야간(18-23) LNG 운영 방향 (심야 저부하 감지 시 LNG 정지/최소 출력 유지 검토 명시, 미 감지시 생략).
+5. 셋째~넷째 항목: [감지된 리스크] 중 **주간(06-18시)** 시간대에 해당하는 이벤트에만 기반해 LNG 운영 방향을 작성. 규칙:
+   - [감지된 리스크]에 '저부하' → "순부하 감소로 LNG 발전 정지 가능성"
+   - [감지된 리스크]에 '최저발전 경고' → "(-) SMP 또는 저순부하로 LNG 정지·태양광 최대 발전 예상"
+   - [감지된 리스크]에 '고부하' → "순부하 증가로 LNG 발전량 증가 예상"
+   - 주간에 해당하는 위 이벤트가 **하나도 없으면** → "주간(오전·오후) 순부하 정상 범위, LNG 안정 운영 전망" (이 경우 반드시 한 줄로 작성하고 다른 리스크를 만들지 말 것).
+6. 다섯번째 항목: [감지된 리스크] 중 **심야(00-06) 또는 야간(18-23)** 에 해당하는 이벤트 기반 LNG 운영 방향.
+   - '심야 저부하' 감지 시 → "심야 LNG 정지/최소 출력 유지 검토 필요"
+   - 심야·야간 해당 리스크가 없으면 → "심야·야간 순부하 정상 범위, LNG 안정 운영 전망"
 7. "~입니다", "~습니다" 경어체.
 """
 #7. 여섯번째 항목 : 저일사 후처리가 적용된 경우에만 해당, 둘째 항목에 "저일사 후처리 적용(최대 N%)" 문구를 반드시 포함.

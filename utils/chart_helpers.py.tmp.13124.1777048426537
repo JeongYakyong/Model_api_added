@@ -409,23 +409,23 @@ def draw_warning_zones(fig, df, smp_col=None):
     # - show_legend_label 은 모두 legend2(경고 밴드 전용 범례)로 분리
     opacity = 0.25
     draw_danger_zones(fig, df, low_mask, 'gold',
-                      show_legend_label='저발전',
+                      show_legend_label='저발전 경고 구간',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
     draw_danger_zones(fig, df, high_mask, 'blue',
-                      show_legend_label='고발전',
+                      show_legend_label='고발전 경고 구간',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
-    draw_danger_zones(fig, df, overnight_mask, 'gold',
-                      show_legend_label='심야 저부하',
+    draw_danger_zones(fig, df, overnight_mask, 'darkorange',
+                      show_legend_label='심야 저부하 경고 구간',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
     draw_danger_zones(fig, df, max_mask, 'purple',
-                      show_legend_label='최대발전',
+                      show_legend_label='최대발전 경고 구간',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
-    draw_danger_zones(fig, df, min_mask, 'darkorange',
-                      show_legend_label='최저발전',
+    draw_danger_zones(fig, df, min_mask, 'orange',
+                      show_legend_label='최저발전 경고 구간',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2', padding_hours=2.0)
 

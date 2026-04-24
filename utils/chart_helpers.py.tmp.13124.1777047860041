@@ -409,23 +409,23 @@ def draw_warning_zones(fig, df, smp_col=None):
     # - show_legend_label 은 모두 legend2(경고 밴드 전용 범례)로 분리
     opacity = 0.25
     draw_danger_zones(fig, df, low_mask, 'gold',
-                      show_legend_label='저발전',
+                      show_legend_label='저발전 경고',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
     draw_danger_zones(fig, df, high_mask, 'blue',
-                      show_legend_label='고발전',
+                      show_legend_label='고발전 경고',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
-    draw_danger_zones(fig, df, overnight_mask, 'gold',
-                      show_legend_label='심야 저부하',
+    draw_danger_zones(fig, df, overnight_mask, 'darkorange',
+                      show_legend_label='심야 저부하 경고',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
     draw_danger_zones(fig, df, max_mask, 'purple',
-                      show_legend_label='최대발전',
+                      show_legend_label='최대발전 경고',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2')
-    draw_danger_zones(fig, df, min_mask, 'darkorange',
-                      show_legend_label='최저발전',
+    draw_danger_zones(fig, df, min_mask, 'orange',
+                      show_legend_label='최저발전 경고',
                       layer_pos='below', fill_opacity=opacity,
                       legend_ref='legend2', padding_hours=2.0)
 
@@ -439,86 +439,100 @@ def draw_warning_zones(fig, df, smp_col=None):
     )
 
 
-def render_warning_threshold_inputs():
+@st.dialog("⚠️ 경고 임계값 설정")
+def _warning_settings_dialog():
     """
-    기존 '표시 항목' 다이얼로그 안에서 호출하는 경고 임계값 입력 위젯 세트.
-    위젯에 key 를 붙이지 않고 **잠정값 dict 를 반환** — 호출측이 '적용' 버튼에서
-    `commit_warning_thresholds(values)` 로 session_state 에 일괄 반영합니다.
-
-    (Streamlit 위젯이 key 바인딩 과정에서 session_state 를 0/False 로
-    덮어쓰는 문제를 회피하기 위함.)
+    모달 다이얼로그 — 경고 임계값 입력 폼.
+    위젯에는 key를 부여하지 않고, '적용' 버튼 클릭 시 일괄 session_state에 커밋합니다.
+    이렇게 해야 Streamlit 위젯이 session_state 를 0으로 덮어쓰는 현상을 회피할 수 있습니다.
     """
-    init_warning_state()
-
-    w_low = st.number_input(
-        "🟡 저발전 경고 (MW)",
-        value=int(st.session_state.get('warn_low', _WARN_DEFAULTS['warn_low'])),
-        step=10,
-    )
-    w_high = st.number_input(
-        "🔵 고발전 경고 (MW)",
-        value=int(st.session_state.get('warn_high', _WARN_DEFAULTS['warn_high'])),
-        step=10,
-    )
-
-    w_overnight_on = st.checkbox(
-        "🌙 심야 저부하 경고 활성화 (00-06시)",
-        value=bool(st.session_state.get('warn_overnight_enabled',
-                                        _WARN_DEFAULTS['warn_overnight_enabled'])),
-    )
-    w_overnight = int(st.session_state.get('warn_overnight', _WARN_DEFAULTS['warn_overnight']))
-    if w_overnight_on:
-        w_overnight = st.number_input(
-            "심야 순부하 임계값 (MW)",
-            value=w_overnight, step=10,
+    c1, c2 = st.columns(2)
+    with c1:
+        w_low = st.number_input(
+            "🟡 저발전 경고 (MW)",
+            value=int(st.session_state.get('warn_low', _WARN_DEFAULTS['warn_low'])),
+            step=10,
         )
-
-    w_min_on = st.checkbox(
-        "🔴 최저발전 경고 활성화",
-        value=bool(st.session_state.get('warn_min_enabled',
-                                        _WARN_DEFAULTS['warn_min_enabled'])),
-    )
-    w_min = int(st.session_state.get('warn_min', _WARN_DEFAULTS['warn_min']))
-    if w_min_on:
-        w_min = st.number_input(
-            "최저 순부하 임계값 (MW)",
-            value=w_min, step=10,
+        w_high = st.number_input(
+            "🔵 고발전 경고 (MW)",
+            value=int(st.session_state.get('warn_high', _WARN_DEFAULTS['warn_high'])),
+            step=10,
         )
-
-    w_max_on = st.checkbox(
-        "🟣 최대발전 경고 활성화",
-        value=bool(st.session_state.get('warn_max_enabled',
-                                        _WARN_DEFAULTS['warn_max_enabled'])),
-    )
-    w_max = int(st.session_state.get('warn_max', _WARN_DEFAULTS['warn_max']))
-    if w_max_on:
-        w_max = st.number_input(
-            "최대 순부하 임계값 (MW)",
-            value=w_max, step=10,
+        w_overnight_on = st.checkbox(
+            "🌙 심야 저부하 경고 활성화 (00-06시)",
+            value=bool(st.session_state.get('warn_overnight_enabled',
+                                            _WARN_DEFAULTS['warn_overnight_enabled'])),
         )
+        w_overnight = st.session_state.get('warn_overnight', _WARN_DEFAULTS['warn_overnight'])
+        if w_overnight_on:
+            w_overnight = st.number_input(
+                "심야 순부하 임계값 (MW)",
+                value=int(w_overnight),
+                step=10,
+            )
+    with c2:
+        w_min_on = st.checkbox(
+            "🔴 최저발전 경고 활성화",
+            value=bool(st.session_state.get('warn_min_enabled',
+                                            _WARN_DEFAULTS['warn_min_enabled'])),
+        )
+        w_min = st.session_state.get('warn_min', _WARN_DEFAULTS['warn_min'])
+        if w_min_on:
+            w_min = st.number_input(
+                "최저 순부하 임계값 (MW)",
+                value=int(w_min),
+                step=10,
+            )
+        w_max_on = st.checkbox(
+            "🟣 최대발전 경고 활성화",
+            value=bool(st.session_state.get('warn_max_enabled',
+                                            _WARN_DEFAULTS['warn_max_enabled'])),
+        )
+        w_max = st.session_state.get('warn_max', _WARN_DEFAULTS['warn_max'])
+        if w_max_on:
+            w_max = st.number_input(
+                "최대 순부하 임계값 (MW)",
+                value=int(w_max),
+                step=10,
+            )
 
     st.caption(
-        f"💡 우선순위: Min > Max > Overnight > Low/High · "
-        f"Min 조건: est_net_demand < 임계값 **또는** SMP < {SMP_MIN_THRESHOLD}원 · "
+        f"💡 우선순위: Min > Max > Overnight > Low/High (동일 시각엔 최우선 경고만 표시) · "
+        f"Min 조건: est_net_demand < 임계값 **또는** SMP < {SMP_MIN_THRESHOLD}원(하드코딩) · "
         f"Overnight 조건: 00-06시 중 est_net_demand < 임계값"
     )
 
-    return {
-        'warn_low':               int(w_low),
-        'warn_high':              int(w_high),
-        'warn_min_enabled':       bool(w_min_on),
-        'warn_min':               int(w_min),
-        'warn_max_enabled':       bool(w_max_on),
-        'warn_max':               int(w_max),
-        'warn_overnight_enabled': bool(w_overnight_on),
-        'warn_overnight':         int(w_overnight),
-    }
+    st.markdown("---")
+    col_apply, col_reset = st.columns([3, 1])
+    with col_apply:
+        if st.button("적용 / 닫기", type='primary', width='stretch'):
+            st.session_state['warn_low']               = int(w_low)
+            st.session_state['warn_high']              = int(w_high)
+            st.session_state['warn_min_enabled']       = bool(w_min_on)
+            st.session_state['warn_min']               = int(w_min)
+            st.session_state['warn_max_enabled']       = bool(w_max_on)
+            st.session_state['warn_max']               = int(w_max)
+            st.session_state['warn_overnight_enabled'] = bool(w_overnight_on)
+            st.session_state['warn_overnight']         = int(w_overnight)
+            st.rerun()
+    with col_reset:
+        if st.button("기본값", width='stretch'):
+            for k, v in _WARN_DEFAULTS.items():
+                st.session_state[k] = v
+            st.rerun()
 
 
-def commit_warning_thresholds(values: dict):
-    """`render_warning_threshold_inputs()` 가 반환한 dict 를 session_state 에 반영."""
-    for k, v in values.items():
-        st.session_state[k] = v
+def render_warning_settings_sidebar():
+    """
+    사이드바에 경고 임계값 설정 버튼을 표시합니다.
+    버튼 클릭 시 모달 다이얼로그가 열립니다.
+    페이지 어디에서 호출해도 모든 메뉴에서 동일하게 동작합니다.
+    """
+    init_warning_state()  # idempotent — session_state 기본값 보장
+    if st.sidebar.button("⚠️ 경고 임계값 설정",
+                         width='stretch',
+                         key='open_warn_settings'):
+        _warning_settings_dialog()
 
 
 def style_net_demand_warnings(row):

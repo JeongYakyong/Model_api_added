@@ -23,7 +23,8 @@ from utils.chart_helpers import (
     merge_actual_and_forecast,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
     init_warning_state, draw_warning_zones,
-    render_warning_settings, style_net_demand_warnings,
+    render_warning_threshold_inputs, commit_warning_thresholds,
+    style_net_demand_warnings,
 )
 from utils.gemini import (
     generate_energy_narrative,
@@ -190,7 +191,7 @@ if lite_menu == "📈 예측 확인":
     init_warning_state()
 
     # ── 날짜 / 표시항목 / 오버레이 / 오늘예측 — 한 줄 ──
-    col_prev, col_date, col_next, col_btn, col_overlay, col_today = st.columns([0.3, 1, 0.3, 1, 1, 1])
+    col_prev, col_date, col_next, col_btn, col_overlay, col_refresh, col_today = st.columns([0.3, 0.7, 0.3, 0.7, 1, 0.25, 0.7])
     st.markdown("---")
 
     # 이전/다음 날 버튼 — st.session_state['lite_vis_date']를 직접 수정 후 rerun
@@ -234,7 +235,9 @@ if lite_menu == "📈 예측 확인":
         with col_btn:
             st.button("⚙️ 표시 항목", width='stretch', key="lite_btn_plot_items_empty", disabled=True)
         with col_overlay:
-            st.button("📊 실측 OFF", width='stretch', disabled=True, key="lite_btn_overlay_empty")
+            st.button("실측 OFF", width='stretch', disabled=True, key="lite_btn_overlay_empty")
+        with col_refresh:
+            st.button("🔄", width='stretch', disabled=True, key="lite_btn_refresh_empty")
         st.warning("예측 데이터가 없습니다. [🔮 바로 예측] 버튼을 눌러 예측을 실행하거나, [🚀 예측 실행] 메뉴를 이용해 주세요.")
     else:
         df = df_res.copy()
@@ -285,7 +288,7 @@ if lite_menu == "📈 예측 확인":
 
         @st.dialog("📊 표시 항목 설정")
         def select_plot_items():
-            col1, col2 = st.columns(2)
+            col1, col2, col3 = st.columns(3)
             with col1:
                 st.write("**예측 데이터**")
                 current_est = st.session_state.get('lite_vis_vars', [])
@@ -304,11 +307,15 @@ if lite_menu == "📈 예측 확인":
                 else:
                     st.caption("실측 데이터 없음")
                     act_selections = {}
+            with col3:
+                st.write("**⚠️ 경고 임계값**")
+                threshold_vals = render_warning_threshold_inputs()
             st.markdown("---")
             if st.button("적용", type="primary", width='stretch'):
                 st.session_state['lite_vis_vars'] = [k for k, v in est_selections.items() if v]
                 if available_actual:
                     st.session_state['lite_vis_actual'] = [k for k, v in act_selections.items() if v]
+                commit_warning_thresholds(threshold_vals)
                 st.rerun()
 
         # ── 표시항목 / 오버레이 버튼 ──
@@ -316,21 +323,19 @@ if lite_menu == "📈 예측 확인":
             if st.button("⚙️ 표시 항목", width='stretch', key="lite_btn_plot_items"):
                 select_plot_items()
         with col_overlay:
-            ov_sub1, ov_sub2 = st.columns([4, 1])
-            with ov_sub1:
-                if has_actual and available_actual:
-                    is_on = st.session_state.get('lite_show_actual', False)
-                    if st.button("📊 실측 ON" if is_on else "📊 실측 OFF",
-                                 type="primary" if is_on else "secondary",
-                                 width='stretch', key="lite_btn_overlay_toggle"):
-                        st.session_state['lite_show_actual'] = not is_on
-                        st.rerun()
-                else:
-                    st.button("📊 실측 OFF", width='stretch', disabled=True, key="lite_btn_overlay_disabled")
-            with ov_sub2:
-                if st.button("🔄", width='stretch', key="lite_btn_refresh_actual"):
-                    fetch_kpx_past_15min.clear()
+            if has_actual and available_actual:
+                is_on = st.session_state.get('lite_show_actual', False)
+                if st.button("실측 ON" if is_on else "실측 OFF",
+                             type="primary" if is_on else "secondary",
+                             width='stretch', key="lite_btn_overlay_toggle"):
+                    st.session_state['lite_show_actual'] = not is_on
                     st.rerun()
+            else:
+                st.button("실측 OFF", width='stretch', disabled=True, key="lite_btn_overlay_disabled")
+        with col_refresh:
+            if st.button("🔄", width='stretch', key="lite_btn_refresh_actual"):
+                fetch_kpx_past_15min.clear()
+                st.rerun()
 
         selected_vars   = st.session_state['lite_vis_vars']
         selected_actual = st.session_state['lite_vis_actual']
@@ -396,8 +401,6 @@ if lite_menu == "📈 예측 확인":
             render_briefing_expander(df, warn_low, warn_high, vis_date,
                                      btn_key="lite_btn_ai_briefing")
 
-            # ── 경고 설정 expander ──
-            render_warning_settings(expanded=False)
 
             # ── 데이터 테이블 ──
             with st.expander("📋 데이터 테이블", expanded=False):
