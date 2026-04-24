@@ -8,28 +8,41 @@ from datetime import datetime, timedelta
 # chart_helpers.py 맨 아래에 추가
 # ==========================================
 
+def _subtract_intervals(intervals, exclude):
+    """intervals 목록에서 exclude 목록에 해당하는 구간을 잘라낸다."""
+    result = []
+    for s, e in intervals:
+        remaining = [(s, e)]
+        for xs, xe in sorted(exclude):
+            clipped = []
+            for rs, re in remaining:
+                if xe <= rs or xs >= re:
+                    clipped.append((rs, re))
+                elif xs <= rs and xe >= re:
+                    pass
+                elif xs <= rs:
+                    clipped.append((xe, re))
+                elif xe >= re:
+                    clipped.append((rs, xs))
+                else:
+                    clipped.append((rs, xs))
+                    clipped.append((xe, re))
+            remaining = clipped
+        result.extend(remaining)
+    return result
+
+
 def draw_danger_zones(fig, df, condition_series, fill_color,
                       annotation_text=None, show_legend_label=None,
                       layer_pos="below", fill_opacity=0.15,
-                      legend_ref='legend', padding_hours=1.0):
+                      legend_ref='legend', padding_hours=1.0,
+                      exclude_intervals=None):
     """
     Plotly figure에 위험 구간 음영(vrect)을 추가하는 헬퍼.
-
-    Parameters
-    ----------
-    fig : go.Figure          — 음영을 추가할 Plotly 차트
-    df  : pd.DataFrame       — condition_series와 같은 인덱스를 공유하는 데이터프레임
-    condition_series : pd.Series[bool] — True인 구간에 음영 표시
-    fill_color : str         — 음영 색상 (예: "red", "blue")
-    annotation_text : str    — 음영 위에 표시할 텍스트 (None이면 생략)
-    show_legend_label : str  — 범례에 표시할 이름 (None이면 생략)
-    layer_pos : str          — "below" 또는 "above"
-    fill_opacity : float     — 음영 투명도 (기본 0.15)
-    legend_ref : str         — 범례 레퍼런스 (예: 'legend', 'legend2'). 별도 범례로 분리할 때 사용.
-    padding_hours : float    — 이벤트 양쪽으로 확장할 시간(h). 기본 1.0 → 단일시간 이벤트 2h 폭.
+    반환값: 패딩 적용 후 병합된 구간 리스트 (상위 우선순위 구간 exclusion 전달용).
     """
     if not condition_series.any():
-        return
+        return []
 
     danger_df = df[condition_series].copy()
     danger_df['group'] = (condition_series != condition_series.shift()).cumsum()
@@ -41,23 +54,29 @@ def draw_danger_zones(fig, df, condition_series, fill_color,
     )
 
     pad = timedelta(hours=padding_hours)
-    for _, row in danger_zones.iterrows():
-        start_time = row['start'] - pad
-        end_time = row['end'] + pad
-        # vrect 는 annotation 없이 음영만 그림
+    raw_intervals = sorted(
+        [(row['start'] - pad, row['end'] + pad) for _, row in danger_zones.iterrows()]
+    )
+    merged = []
+    for s, e in raw_intervals:
+        if merged and s <= merged[-1][1]:
+            merged[-1] = (merged[-1][0], max(merged[-1][1], e))
+        else:
+            merged.append((s, e))
+
+    draw_ivs = _subtract_intervals(merged, exclude_intervals) if exclude_intervals else merged
+
+    for start_time, end_time in draw_ivs:
         fig.add_vrect(
             x0=start_time, x1=end_time,
             fillcolor=fill_color, opacity=fill_opacity,
             layer=layer_pos, line_width=0,
         )
-        # Plotly의 annotation_position='top'/'top center'는 datetime x축에서
-        # Timestamp 평균 계산 버그로 TypeError를 발생시키므로,
-        # 중앙 정렬 annotation 을 수동으로 추가.
         if annotation_text is not None:
             center_time = start_time + (end_time - start_time) / 2
             fig.add_annotation(
                 x=center_time,
-                y=0.97, yref='paper',   # ← 차트 상단 내부 (임시값, 사용자 튜닝 예정)
+                y=0.97, yref='paper',
                 text=annotation_text,
                 showarrow=False,
                 yanchor='top',
@@ -66,17 +85,18 @@ def draw_danger_zones(fig, df, condition_series, fill_color,
             )
 
     if show_legend_label:
-        # 범례 배지 투명도를 vrect 와 동일하게 맞춰 색감 일치 (진한 원색 → 실제 밴드와 같은 톤)
         trace_kwargs = dict(
             x=[None], y=[None], mode='markers',
-            marker=dict(size=12, color=fill_color, symbol='square',
-                        opacity=fill_opacity),
+            marker=dict(size=12, color=fill_color, symbol='square'),
+            opacity=fill_opacity,
             name=show_legend_label, showlegend=True,
         )
         if legend_ref and legend_ref != 'legend':
             trace_kwargs['legend'] = legend_ref
         fig.add_trace(go.Scatter(**trace_kwargs))
-        
+
+    return merged
+
 # ==========================================
 # 전역 상수
 # ==========================================
@@ -408,35 +428,40 @@ def draw_warning_zones(fig, df, smp_col=None):
     # - 나머지 밴드는 기본 padding=1.0h (총 2h)
     # - show_legend_label 은 모두 legend2(경고 밴드 전용 범례)로 분리
     opacity = 0.25
+    # 저수요 트랙: Min > Overnight > Low
+    min_ivs       = draw_danger_zones(fig, df, min_mask, 'darkorange',
+                                      show_legend_label='최저발전',
+                                      layer_pos='below', fill_opacity=opacity,
+                                      legend_ref='legend2', padding_hours=2.0)
+    overnight_ivs = draw_danger_zones(fig, df, overnight_mask, 'gold',
+                                      show_legend_label='심야 저부하',
+                                      layer_pos='below', fill_opacity=opacity,
+                                      legend_ref='legend2',
+                                      exclude_intervals=min_ivs)
     draw_danger_zones(fig, df, low_mask, 'gold',
                       show_legend_label='저발전',
                       layer_pos='below', fill_opacity=opacity,
-                      legend_ref='legend2')
+                      legend_ref='legend2',
+                      exclude_intervals=min_ivs + overnight_ivs)
+    # 고수요 트랙: Max > High (Min/Max 동시 발생 없음 → 크로스트랙 exclusion 불필요)
+    max_ivs = draw_danger_zones(fig, df, max_mask, 'purple',
+                                show_legend_label='최대발전',
+                                layer_pos='below', fill_opacity=opacity,
+                                legend_ref='legend2')
     draw_danger_zones(fig, df, high_mask, 'blue',
                       show_legend_label='고발전',
                       layer_pos='below', fill_opacity=opacity,
-                      legend_ref='legend2')
-    draw_danger_zones(fig, df, overnight_mask, 'gold',
-                      show_legend_label='심야 저부하',
-                      layer_pos='below', fill_opacity=opacity,
-                      legend_ref='legend2')
-    draw_danger_zones(fig, df, max_mask, 'purple',
-                      show_legend_label='최대발전',
-                      layer_pos='below', fill_opacity=opacity,
-                      legend_ref='legend2')
-    draw_danger_zones(fig, df, min_mask, 'darkorange',
-                      show_legend_label='최저발전',
-                      layer_pos='below', fill_opacity=opacity,
-                      legend_ref='legend2', padding_hours=2.0)
+                      legend_ref='legend2',
+                      exclude_intervals=max_ivs)
 
-    # ── 경고 밴드 전용 2차 범례 — legend1(top-right)과 대칭으로 top-left 배치, 동일 포맷 ──
-    fig.update_layout(
-        legend2=dict(
-            orientation='h',
-            yanchor='bottom', y=1.02,
-            xanchor='left', x=0,
+    if any(m.any() for m in [min_mask, low_mask, max_mask, high_mask, overnight_mask]):
+        fig.update_layout(
+            legend2=dict(
+                orientation='h',
+                yanchor='bottom', y=1.02,
+                xanchor='left', x=0,
+            )
         )
-    )
 
 
 def render_warning_threshold_inputs():
