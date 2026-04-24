@@ -424,7 +424,7 @@ def draw_warning_zones(fig, df, smp_col=None):
     high_mask      = high_raw & ~priority_mask
 
     # ── 렌더 (모두 below 레이어, 동일 투명도, annotation_text 미사용 — 범례로만 식별) ──
-    # - Min 밴드는 SMP 급락(단일시간) 이벤트가 많아 padding_hours=2.0h(총 4h) 로 확대
+    # - Min 밴드는 SMP 급락(단일시간) 이벤트가 많아 padding_hours=1.0h(총 2h) 로 확대
     # - 나머지 밴드는 기본 padding=1.0h (총 2h)
     # - show_legend_label 은 모두 legend2(경고 밴드 전용 범례)로 분리
     opacity = 0.25
@@ -432,7 +432,7 @@ def draw_warning_zones(fig, df, smp_col=None):
     min_ivs       = draw_danger_zones(fig, df, min_mask, 'darkorange',
                                       show_legend_label='최저발전',
                                       layer_pos='below', fill_opacity=opacity,
-                                      legend_ref='legend2', padding_hours=2.0)
+                                      legend_ref='legend2', padding_hours=1.0)
     overnight_ivs = draw_danger_zones(fig, df, overnight_mask, 'gold',
                                       show_legend_label='심야 저부하',
                                       layer_pos='below', fill_opacity=opacity,
