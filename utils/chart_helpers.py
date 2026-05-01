@@ -523,8 +523,8 @@ def render_warning_threshold_inputs():
         )
 
     st.caption(
-        f"💡 우선순위: Min > Max > Overnight > Low/High · "
-        f"Min 조건: est_net_demand < 임계값 **또는** SMP < {SMP_MIN_THRESHOLD}원 · "
+        f"경고우선순위: Min > Max > Overnight > Low/High  \n\n"
+        f"Min 조건: est_net_demand < 임계값 **또는** SMP < {SMP_MIN_THRESHOLD}원 \n\n "
         f"Overnight 조건: 00-06시 중 est_net_demand < 임계값"
     )
 

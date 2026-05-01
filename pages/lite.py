@@ -286,7 +286,7 @@ if lite_menu == "📈 예측 확인":
             if has_actual and col in actual_df.columns and actual_df[col].notna().any()
         }
 
-        @st.dialog("📊 표시 항목 설정")
+        @st.dialog("📊 표시 항목 설정", width="large")
         def select_plot_items():
             col1, col2, col3 = st.columns(3)
             with col1:
@@ -335,6 +335,10 @@ if lite_menu == "📈 예측 확인":
         with col_refresh:
             if st.button("🔄", width='stretch', key="lite_btn_refresh_actual"):
                 fetch_kpx_past_15min.clear()
+                daily_historical_kma(
+                    vis_date.strftime("%Y-%m-%d"),
+                    vis_date.strftime("%Y-%m-%d"),
+                )
                 st.rerun()
 
         selected_vars   = st.session_state['lite_vis_vars']
@@ -402,12 +406,65 @@ if lite_menu == "📈 예측 확인":
                                      btn_key="lite_btn_ai_briefing")
 
 
-            # ── 데이터 테이블 ──
+            # ── 기상 데이터 테이블 ──
+            _WEATHER_COLS = {
+                'solar_rad_fore':      '일사량 예측 (MJ/m²)',
+                'solar_rad':           '일사량 실측 (MJ/m²)',
+                'wind_spd_north_fore': '북쪽 풍속 예측 (m/s)',
+                'wind_spd_north':      '북쪽 풍속 실측 (m/s)',
+                'rainfall_fore':       '강수량 예측 (mm)',
+                'rainfall':            '강수량 실측 (mm)',
+                'total_cloud_fore':    '전운량 예측',
+                'total_cloud':         '전운량 실측',
+            }
+            _GAP_PAIRS = [
+                ('solar_rad_fore',      'solar_rad'),
+                ('wind_spd_north_fore', 'wind_spd_north'),
+                ('rainfall_fore',       'rainfall'),
+                ('total_cloud_fore',    'total_cloud'),
+            ]
             with st.expander("📋 데이터 테이블", expanded=False):
-                display_cols = [c for c in selected_vars if c in df.columns]
+                # 컬럼 순서를 _WEATHER_COLS 기준으로 선행 확보 (est/real 교차 배치)
+                weather_tbl = pd.DataFrame(float('nan'),
+                                           index=df.index,
+                                           columns=list(_WEATHER_COLS.keys()))
+
+                # 예측 기상 컬럼 (forecast df에서)
+                for src, dst in [('solar_rad', 'solar_rad_fore'), ('wind_spd_north', 'wind_spd_north_fore'),
+                                  ('rainfall', 'rainfall_fore'), ('total_cloud', 'total_cloud_fore')]:
+                    if src in df.columns:
+                        weather_tbl[dst] = df[src].values
+
+                # 실측 기상 컬럼 (historical DB, 없으면 --)
+                hist_w = db.get_historical(start_str, f"{vis_date} 23:59:59")
+                if not hist_w.empty:
+                    if not pd.api.types.is_datetime64_any_dtype(hist_w.index):
+                        hist_w.index = pd.to_datetime(hist_w.index)
+                    for col in ['solar_rad', 'wind_spd_north', 'rainfall', 'total_cloud']:
+                        if col in hist_w.columns:
+                            weather_tbl[col] = hist_w[col].reindex(weather_tbl.index)
+
+                disp = weather_tbl.rename(columns=_WEATHER_COLS).copy()
+                disp.index = pd.to_datetime(weather_tbl.index).strftime('%y-%m-%d %H:%M')
+
+                def _highlight_gap(df):
+                    styles = pd.DataFrame('', index=df.index, columns=df.columns)
+                    for est_key, real_key in _GAP_PAIRS:
+                        est_label  = _WEATHER_COLS.get(est_key)
+                        real_label = _WEATHER_COLS.get(real_key)
+                        if est_label not in df.columns or real_label not in df.columns:
+                            continue
+                        est  = pd.to_numeric(df[est_label],  errors='coerce')
+                        real = pd.to_numeric(df[real_label], errors='coerce')
+                        denom = 0.5 * (est.abs() + real.abs()) + 1e-6
+                        mask = est.notna() & real.notna() & ((est - real).abs() / denom > 0.4)
+                        styles.loc[mask, est_label]  = 'background-color: lightsalmon'
+                        styles.loc[mask, real_label] = 'background-color: lightsalmon'
+                    return styles
+
                 st.dataframe(
-                    df[display_cols].style.apply(style_net_demand_warnings, axis=1).format(precision=2),
-                    width="stretch"
+                    disp.style.apply(_highlight_gap, axis=None).format(precision=2, na_rep='--'),
+                    width="stretch",
                 )
 
 

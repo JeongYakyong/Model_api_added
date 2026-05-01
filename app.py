@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+import time
 import logging
 import warnings
 
@@ -43,13 +44,34 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 비밀번호 인증
+# 비밀번호 인증 (6시간 자동 유지)
 # ==========================================
+_AUTH_TOKEN = os.path.join(os.path.dirname(os.path.abspath(__file__)), "database", ".auth_token")
+_AUTH_TTL   = 6 * 3600  # 6 hours in seconds
+
+def _token_valid():
+    try:
+        return os.path.exists(_AUTH_TOKEN) and (time.time() - os.path.getmtime(_AUTH_TOKEN)) < _AUTH_TTL
+    except Exception:
+        return False
+
+def _write_token():
+    try:
+        os.makedirs(os.path.dirname(_AUTH_TOKEN), exist_ok=True)
+        with open(_AUTH_TOKEN, 'w') as f:
+            f.write(str(time.time()))
+    except Exception:
+        pass
+
 def check_password():
     if "authenticated" not in st.session_state:
         st.session_state.authenticated = False
 
     if st.session_state.authenticated:
+        return True
+
+    if _token_valid():
+        st.session_state.authenticated = True
         return True
 
     st.title("  ")
@@ -58,6 +80,7 @@ def check_password():
     if password:
         if password == st.secrets["password"]:
             st.session_state.authenticated = True
+            _write_token()
             st.rerun()
         else:
             st.error("비밀번호가 틀렸습니다.")
