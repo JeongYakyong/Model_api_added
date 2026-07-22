@@ -29,9 +29,6 @@ load_dotenv()
 KMA_KEY = os.getenv("KMA_API_KEY")
 KPX_KEY = os.getenv("KPX_API_KEY")
 
-_NCM_CYCLE_KST    = ["03:00", "11:00", "17:00"]
-_VILAGE_CYCLE_KST = ["01:00", "11:00", "17:00"]
-
 # ============================================================================
 # 시나리오 1: 초기 데이터 수집 (5년치)
 # ============================================================================
@@ -323,33 +320,6 @@ def daily_historical_kpx_smp(start_date, end_date):
         db.close()
         
 
-def _save_vilage_cycles(db, target_date, target_d, today, now_kst, KST):
-    """VilageFcst 사이클 저장 — past/today/future 분기. 실패 시 KIMG 폴백."""
-    try:
-        if target_d < today:
-            for time_str in _VILAGE_CYCLE_KST:
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
-        elif target_d == today:
-            for time_str in _VILAGE_CYCLE_KST:
-                ct = datetime.strptime(f"{target_date} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
-                if ct > now_kst:
-                    continue
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
-            v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-            if not v.empty:
-                db.save_forecast(v, auto_add_capacity=False)
-        else:
-            v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-            if not v.empty:
-                db.save_forecast(v, auto_add_capacity=False)
-    except Exception as e:
-        logger.warning(f"[{target_date}] VilageFcst 수집 실패 (KIMG 사용): {e}")
-
-
 # ============================================================================
 # 시나리오 3: 예측 정보 업데이트 (현재 기준 과거는 3일전, 미래는 1일 후 까지)
 # ============================================================================
@@ -361,12 +331,12 @@ def daily_forecast_and_predict(start_date, end_date):
     now_kst = datetime.now(KST)
     today = now_kst.date()
 
-    NCM_CYCLE_KST    = ["03:00", "11:00", "17:00"]  # KIMG NCM 사이클 (기존)
-    VILAGE_CYCLE_KST = ["01:00", "11:00", "17:00"]  # VilageFcst 사이클 (D-1 23:00 커버 포함)
-
+    # "01:00" → VilageFcst picks D-1 23:00 cycle (covers D 00:00+); NCM picks same cycle as before
+    CYCLE_AVAILABLE_KST = ["01:00", "11:00", "17:00"]
+    
     start_dt = datetime.strptime(start_date, "%Y-%m-%d")
     end_dt = datetime.strptime(end_date, "%Y-%m-%d")
-
+    
     logger.info(f"통합 예보 업데이트 시작: {start_date} ~ {end_date}")
     db = JejuEnergyDB()
     current_dt = start_dt
@@ -375,68 +345,71 @@ def daily_forecast_and_predict(start_date, end_date):
         target_date = current_dt.strftime("%Y-%m-%d")
         target_d = current_dt.date()
         logger.info(f"[{target_date}] 데이터 수집 시작...")
-
-        # 1. KPX
+        
+        # 1. KPX 수집 (날짜 분기 무관, 항상 1회)
+        kpx_data = None
         try:
             kpx_forecast = fetch_kpx_future(target_date, KPX_KEY)
             if not kpx_forecast.empty:
-                db.save_forecast(kpx_forecast, auto_add_capacity=True)
-                logger.info(f"[{target_date}] KPX 저장 완료")
+                kpx_data = kpx_forecast
         except Exception as e:
             logger.error(f"[{target_date}] KPX API 실패: {e}")
 
-        # 2. KIMG NCM (남쪽+북쪽 동시, 기존 사이클 유지)
+        # KPX는 선 저장 (KMA와 독립적으로 UPSERT)
+        if kpx_data is not None:
+            db.save_forecast(kpx_data, auto_add_capacity=True)
+            logger.info(f"[{target_date}] KPX 저장 완료")
+            
+        # 2. KMA 수집 (과거/오늘/미래 분기) — 남쪽+북쪽 동시 수집
         try:
             if target_d < today:
-                logger.info(f"[{target_date}] KMA NCM 과거 소급 ({len(NCM_CYCLE_KST)} 사이클)")
-                for time_str in NCM_CYCLE_KST:
-                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=f"{target_date} {time_str}")
+                # ── 과거: 사이클 시간순 소급 ──
+                logger.info(f"[{target_date}] KMA 과거 소급 수집 ({len(CYCLE_AVAILABLE_KST)} 사이클)")
+                for time_str in CYCLE_AVAILABLE_KST:
+                    as_of = f"{target_date} {time_str}"
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
+
+                logger.info(f"[{target_date}] KMA 과거 소급 완료")
+
             elif target_d == today:
-                logger.info(f"[{target_date}] KMA NCM 오늘 멀티사이클")
-                for time_str in NCM_CYCLE_KST:
-                    ct = datetime.strptime(f"{target_date} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
-                    if ct > now_kst:
+                # ── 오늘: 이미 지난 사이클 순차 호출 + 최신 사이클 ──
+                logger.info(f"[{target_date}] KMA 오늘 멀티사이클 수집")
+                for time_str in CYCLE_AVAILABLE_KST:
+                    cycle_time = datetime.strptime(
+                        f"{target_date} {time_str}", "%Y-%m-%d %H:%M"
+                    ).replace(tzinfo=KST)
+
+                    # 아직 도래하지 않은 사이클은 건너뜀
+                    if cycle_time > now_kst:
                         continue
-                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=f"{target_date} {time_str}")
+
+                    as_of = f"{target_date} {time_str}"
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
+
+                # 마지막으로 현재 시각 기준 최신 사이클 (미래 시간대 커버)
                 kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
+                    logger.info(f"[{target_date}] KMA 오늘 멀티사이클 저장 완료")
+                else:
+                    logger.warning(f"[{target_date}] KMA 최신 사이클 데이터 없음")
+
             else:
+                # ── 미래: 최신 사이클 1회 ──
                 kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
-        except Exception as e:
-            logger.error(f"[{target_date}] KMA NCM API 실패: {e}")
+                    logger.info(f"[{target_date}] KMA {len(kma_data)}행 저장 완료")
+                else:
+                    logger.warning(f"[{target_date}] KMA 데이터 없음")
 
-        # 3. VilageFcst 북쪽 풍속 (별도 사이클 — D-3~D+2 범위 내에서만 동작)
-        try:
-            if target_d < today:
-                for time_str in VILAGE_CYCLE_KST:
-                    v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                    if not v.empty:
-                        db.save_forecast(v, auto_add_capacity=False)
-            elif target_d == today:
-                for time_str in VILAGE_CYCLE_KST:
-                    ct = datetime.strptime(f"{target_date} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
-                    if ct > now_kst:
-                        continue
-                    v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                    if not v.empty:
-                        db.save_forecast(v, auto_add_capacity=False)
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
-            else:
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
         except Exception as e:
-            logger.warning(f"[{target_date}] VilageFcst 수집 실패 (KIMG 사용): {e}")
-
+            logger.error(f"[{target_date}] KMA API 실패: {e}")
+            
         current_dt += timedelta(days=1)
         
     db.close()
@@ -481,76 +454,67 @@ def daily_forecast_kma(start_date, end_date):
     #
     # UPSERT로 나중 사이클이 같은 시간대를 덮어쓰므로,
     # 앞쪽 사이클은 빈 시간대를 채우는 역할, 뒤쪽이 최신 예보로 갱신하는 역할
-    NCM_CYCLE_KST    = ["03:00", "11:00", "17:00"]  # KIMG NCM (기존 불변)
-    VILAGE_CYCLE_KST = ["01:00", "11:00", "17:00"]  # VilageFcst (D-1 23:00 커버 포함)
-
+    # "01:00" → VilageFcst picks D-1 23:00 cycle (covers D 00:00+); NCM cycle unchanged
+    CYCLE_AVAILABLE_KST = ["01:00", "11:00", "17:00"]
+    
     logger.info(f"KMA 예보 수집: {start_date} ~ {end_date}")
     db = JejuEnergyDB()
     current_dt = start_dt
-
+    
     while current_dt <= end_dt:
         target_date = current_dt.strftime("%Y-%m-%d")
         target_d = current_dt.date()
-
-        # ── KIMG NCM (기존 사이클 그대로) ──
+        
         try:
             if target_d < today:
-                logger.info(f"[{target_date}] NCM 과거 소급 ({len(NCM_CYCLE_KST)} 사이클)")
-                for time_str in NCM_CYCLE_KST:
-                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=f"{target_date} {time_str}")
+                # ── 과거 날짜: 사이클 시간순 소급 호출 ──
+                logger.info(f"[{target_date}] 과거 소급 수집 ({len(CYCLE_AVAILABLE_KST)} 사이클)")
+                for time_str in CYCLE_AVAILABLE_KST:
+                    as_of = f"{target_date} {time_str}"
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
-                logger.info(f"[{target_date}] NCM 과거 소급 완료")
+
+                logger.info(f"[{target_date}] 과거 소급 완료")
+
             elif target_d == today:
-                logger.info(f"[{target_date}] NCM 오늘 멀티사이클")
-                for time_str in NCM_CYCLE_KST:
-                    ct = datetime.strptime(f"{target_date} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
-                    if ct > now_kst:
+                # ── 오늘: 이미 지난 사이클 순차 호출 + 최신 사이클 ──
+                logger.info(f"[{target_date}] 오늘 멀티사이클 수집")
+                for time_str in CYCLE_AVAILABLE_KST:
+                    cycle_time = datetime.strptime(
+                        f"{target_date} {time_str}", "%Y-%m-%d %H:%M"
+                    ).replace(tzinfo=KST)
+
+                    # 아직 도래하지 않은 사이클은 건너뜀
+                    if cycle_time > now_kst:
                         continue
-                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=f"{target_date} {time_str}")
+
+                    as_of = f"{target_date} {time_str}"
+                    kma_data = _fetch_kma_concurrent(target_date, as_of_kst=as_of)
                     if not kma_data.empty:
                         db.save_forecast(kma_data, auto_add_capacity=True)
+
+                # 마지막으로 현재 시각 기준 최신 사이클 (미래 시간대 커버)
                 kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
-                    logger.info(f"[{target_date}] NCM 오늘 완료")
+                    logger.info(f"[{target_date}] 오늘 멀티사이클 저장 완료")
                 else:
-                    logger.warning(f"[{target_date}] NCM 최신 사이클 없음")
+                    logger.warning(f"[{target_date}] 최신 사이클 데이터 없음")
+
             else:
+                # ── 미래: 현재 최신 사이클로 가능한 만큼 ──
+                logger.info(f"[{target_date}] 미래 - 현재 최신 사이클 호출")
                 kma_data = _fetch_kma_concurrent(target_date)
                 if not kma_data.empty:
                     db.save_forecast(kma_data, auto_add_capacity=True)
-                    logger.info(f"[{target_date}] NCM {len(kma_data)}행 저장")
+                    logger.info(f"[{target_date}] {len(kma_data)}행 저장")
                 else:
-                    logger.warning(f"[{target_date}] NCM 데이터 없음")
-        except Exception as e:
-            logger.error(f"[{target_date}] KMA NCM API 실패: {e}")
+                    logger.warning(f"[{target_date}] KMA 데이터 없음")
 
-        # ── VilageFcst 북쪽 풍속 (별도 사이클, D-3~D+2 범위 내에서만 동작) ──
-        try:
-            if target_d < today:
-                for time_str in VILAGE_CYCLE_KST:
-                    v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                    if not v.empty:
-                        db.save_forecast(v, auto_add_capacity=False)
-            elif target_d == today:
-                for time_str in VILAGE_CYCLE_KST:
-                    ct = datetime.strptime(f"{target_date} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
-                    if ct > now_kst:
-                        continue
-                    v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                    if not v.empty:
-                        db.save_forecast(v, auto_add_capacity=False)
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
-            else:
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
         except Exception as e:
-            logger.warning(f"[{target_date}] VilageFcst 수집 실패 (KIMG 사용): {e}")
-
+            logger.error(f"[{target_date}] KMA API 실패: {e}")
+            
         current_dt += timedelta(days=1)
         
     db.close()
@@ -666,43 +630,6 @@ def prepare_model_input(df):
     return df
 
 
-# 서빙 안전망: DB에 이미 시간 구멍이 있어도 예측이 돌아가도록 채우는 연속 결측 허용 개수
-_SERVING_INTERP_LIMIT = 3
-
-
-def fill_hourly_gaps(df, start_str, end_str):
-    """
-    모델 입력을 1시간 간격 격자로 되돌린다.
-
-    예보가 3시간 간격으로 들어와 DB에 시간 구멍이 남은 구간에서도 예측이
-    돌아가게 하는 안전망. 보간 결과는 메모리에만 존재하며 DB에는 쓰지 않는다.
-    """
-    if df.empty:
-        return df
-
-    full_index = pd.date_range(start=start_str, end=end_str, freq='h')
-    full_index_str = full_index.strftime('%Y-%m-%d %H:%M:%S')
-
-    missing_count = len(full_index_str.difference(df.index))
-    if missing_count == 0:
-        return df
-
-    filled = df.reindex(full_index_str)
-    filled.index = full_index                      # 시간 보간을 위해 잠시 DatetimeIndex로
-
-    numeric_cols = filled.select_dtypes(include='number').columns
-    filled[numeric_cols] = filled[numeric_cols].interpolate(
-        method='time', limit=_SERVING_INTERP_LIMIT, limit_direction='both'
-    )
-
-    filled.index = full_index_str
-    filled.index.name = df.index.name
-
-    logger.warning(f"모델 입력에 {missing_count}개 시각 누락 → 보간으로 채움 "
-                   f"(DB 미반영, {len(df)}행 → {len(filled)}행)")
-    return filled
-
-
 def run_model_prediction(target_date, db, assets):
     solar_model, wind_model, scalers, metadata, device = assets 
     
@@ -732,9 +659,6 @@ def run_model_prediction(target_date, db, assets):
     
     # [변경] past=ASOS, future=forecast 명확 분리
     df = db.get_model_input(start_str, end_str, target_date_str)
-
-    # 예보가 3시간 간격으로 들어온 구간의 시간 구멍 보정 (메모리에서만)
-    df = fill_hourly_gaps(df, start_str, end_str)
 
     # [추가] 롤링 예측 지원 (+2일, +3일)
     if 'est_Solar_Utilization' in df.columns and 'Solar_Utilization' in df.columns:

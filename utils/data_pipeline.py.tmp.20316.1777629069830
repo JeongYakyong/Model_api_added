@@ -29,9 +29,6 @@ load_dotenv()
 KMA_KEY = os.getenv("KMA_API_KEY")
 KPX_KEY = os.getenv("KPX_API_KEY")
 
-_NCM_CYCLE_KST    = ["03:00", "11:00", "17:00"]
-_VILAGE_CYCLE_KST = ["01:00", "11:00", "17:00"]
-
 # ============================================================================
 # 시나리오 1: 초기 데이터 수집 (5년치)
 # ============================================================================
@@ -322,33 +319,6 @@ def daily_historical_kpx_smp(start_date, end_date):
     finally:
         db.close()
         
-
-def _save_vilage_cycles(db, target_date, target_d, today, now_kst, KST):
-    """VilageFcst 사이클 저장 — past/today/future 분기. 실패 시 KIMG 폴백."""
-    try:
-        if target_d < today:
-            for time_str in _VILAGE_CYCLE_KST:
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
-        elif target_d == today:
-            for time_str in _VILAGE_CYCLE_KST:
-                ct = datetime.strptime(f"{target_date} {time_str}", "%Y-%m-%d %H:%M").replace(tzinfo=KST)
-                if ct > now_kst:
-                    continue
-                v = fetch_kma_vilage_wind(KMA_KEY, target_date, as_of_kst=f"{target_date} {time_str}")
-                if not v.empty:
-                    db.save_forecast(v, auto_add_capacity=False)
-            v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-            if not v.empty:
-                db.save_forecast(v, auto_add_capacity=False)
-        else:
-            v = fetch_kma_vilage_wind(KMA_KEY, target_date)
-            if not v.empty:
-                db.save_forecast(v, auto_add_capacity=False)
-    except Exception as e:
-        logger.warning(f"[{target_date}] VilageFcst 수집 실패 (KIMG 사용): {e}")
-
 
 # ============================================================================
 # 시나리오 3: 예측 정보 업데이트 (현재 기준 과거는 3일전, 미래는 1일 후 까지)
@@ -666,43 +636,6 @@ def prepare_model_input(df):
     return df
 
 
-# 서빙 안전망: DB에 이미 시간 구멍이 있어도 예측이 돌아가도록 채우는 연속 결측 허용 개수
-_SERVING_INTERP_LIMIT = 3
-
-
-def fill_hourly_gaps(df, start_str, end_str):
-    """
-    모델 입력을 1시간 간격 격자로 되돌린다.
-
-    예보가 3시간 간격으로 들어와 DB에 시간 구멍이 남은 구간에서도 예측이
-    돌아가게 하는 안전망. 보간 결과는 메모리에만 존재하며 DB에는 쓰지 않는다.
-    """
-    if df.empty:
-        return df
-
-    full_index = pd.date_range(start=start_str, end=end_str, freq='h')
-    full_index_str = full_index.strftime('%Y-%m-%d %H:%M:%S')
-
-    missing_count = len(full_index_str.difference(df.index))
-    if missing_count == 0:
-        return df
-
-    filled = df.reindex(full_index_str)
-    filled.index = full_index                      # 시간 보간을 위해 잠시 DatetimeIndex로
-
-    numeric_cols = filled.select_dtypes(include='number').columns
-    filled[numeric_cols] = filled[numeric_cols].interpolate(
-        method='time', limit=_SERVING_INTERP_LIMIT, limit_direction='both'
-    )
-
-    filled.index = full_index_str
-    filled.index.name = df.index.name
-
-    logger.warning(f"모델 입력에 {missing_count}개 시각 누락 → 보간으로 채움 "
-                   f"(DB 미반영, {len(df)}행 → {len(filled)}행)")
-    return filled
-
-
 def run_model_prediction(target_date, db, assets):
     solar_model, wind_model, scalers, metadata, device = assets 
     
@@ -732,9 +665,6 @@ def run_model_prediction(target_date, db, assets):
     
     # [변경] past=ASOS, future=forecast 명확 분리
     df = db.get_model_input(start_str, end_str, target_date_str)
-
-    # 예보가 3시간 간격으로 들어온 구간의 시간 구멍 보정 (메모리에서만)
-    df = fill_hourly_gaps(df, start_str, end_str)
 
     # [추가] 롤링 예측 지원 (+2일, +3일)
     if 'est_Solar_Utilization' in df.columns and 'Solar_Utilization' in df.columns:

@@ -40,44 +40,6 @@ def warmup_kma_session(auth_key):
         pass
 
 
-# 예보가 3시간 간격으로 올 때 비는 시간대를 메우기 위한 연속 결측 허용 개수
-_NCM_INTERP_LIMIT = 3
-
-
-def _fill_missing_hours(df, target_hours, label):
-    """
-    시간별로 따로 호출한 NCM 결과를 요청했던 전체 시간 격자로 되돌린다.
-
-    KMA 예보가 1시간이 아닌 3시간 간격으로 제공되면 중간 시각 요청은 빈 응답이
-    돌아와 행 자체가 사라진다. 그대로 두면 모델 입력 길이가 모자라 예측이
-    실패하므로, 빠진 시각을 시간 기준 선형 보간으로 채운다.
-
-    반드시 후처리(풍향 계산, 강수량 diff) 전에 호출할 것.
-    u/v 성분과 누적 강수량 상태에서 보간해야 값이 맞는다.
-
-    df: 'timestamp'(datetime) 컬럼을 가진 DataFrame
-    """
-    # target_hours의 시각은 tz-aware이므로, 수집 결과와 같은 문자열 포맷을 거쳐
-    # tz-naive로 맞춘 뒤 인덱스를 만든다
-    full_index = pd.to_datetime(
-        [kst_time.strftime('%Y-%m-%d %H:%M:%S') for _, kst_time in target_hours]
-    )
-    missing_count = len(full_index) - len(df)
-    if missing_count <= 0:
-        return df
-
-    filled = (
-        df.set_index('timestamp')
-          .reindex(full_index)
-          .interpolate(method='time', limit=_NCM_INTERP_LIMIT, limit_direction='both')
-          .dropna(how='all')
-    )
-    logger.warning(f"[{label}] 예보 {missing_count}개 시각 누락 → 보간으로 채움 "
-                   f"({len(df)}행 → {len(filled)}행)")
-
-    return filled.rename_axis('timestamp').reset_index()
-
-
 # ============================================================================
 # 1. KPX API - 계통 데이터
 # ============================================================================
@@ -292,24 +254,11 @@ def fetch_kpx_historical(start_date, end_date, service_key):
 # ASOS 실측 풍속 2권역 가중평균 (api_fetchers.py 에 추가)
 # ============================================================================
 
-_ZONE_EAST = "동쪽"
-_ZONE_WEST = "서쪽"
-
 # 예보(WIND_ZONES)와 동일한 용량 비율 사용
 ASOS_WIND_STATIONS = {
-    _ZONE_EAST: {"stn_id": 188, "capacity_mw": 201.1},   # 성산
-    _ZONE_WEST: {"stn_id": 185, "capacity_mw": 217.8},   # 고산
+    "동쪽": {"stn_id": 188, "capacity_mw": 201.1},   # 성산
+    "서쪽": {"stn_id": 185, "capacity_mw": 217.8},   # 고산
 }
-
-
-def _apply_zone_data(zone_data, row_dict):
-    """zone_data의 동쪽/서쪽 값을 row_dict의 east/west 컬럼으로 기록."""
-    for key, direction in [(_ZONE_EAST, "east"), (_ZONE_WEST, "west")]:
-        if key in zone_data:
-            spd, sin_v, cos_v = zone_data[key]
-            row_dict[f"wind_spd_{direction}"] = spd
-            row_dict[f"wd_sin_{direction}"]   = sin_v
-            row_dict[f"wd_cos_{direction}"]   = cos_v
 ASOS_WIND_TOTAL = sum(s["capacity_mw"] for s in ASOS_WIND_STATIONS.values())
 
 
@@ -347,7 +296,6 @@ def fetch_kma_past_asos_wind(start_date, end_date, auth_key):
         u_sum = 0.0
         v_sum = 0.0
         w_sum = 0.0
-        zone_data = {}
 
         for name, weight, df in station_dfs:
             if ts in df.index:
@@ -359,7 +307,6 @@ def fetch_kma_past_asos_wind(start_date, end_date, auth_key):
                 u_sum += weight * spd * sin_val
                 v_sum += weight * spd * cos_val
                 w_sum += weight
-                zone_data[name] = (round(spd, 2), round(sin_val, 4), round(cos_val, 4))
 
         if w_sum == 0:
             continue
@@ -370,14 +317,12 @@ def fetch_kma_past_asos_wind(start_date, end_date, auth_key):
         wind_spd = np.sqrt(u_avg**2 + v_avg**2)
         wind_dir_rad = np.arctan2(u_avg, v_avg)
 
-        row_dict = {
+        result_rows.append({
             "timestamp": ts,
             "wind_spd_north": round(wind_spd, 2),
             "wd_sin_north": round(np.sin(wind_dir_rad), 4),
             "wd_cos_north": round(np.cos(wind_dir_rad), 4),
-        }
-        _apply_zone_data(zone_data, row_dict)
-        result_rows.append(row_dict)
+        })
 
     if not result_rows:
         return pd.DataFrame()
@@ -638,7 +583,6 @@ def fetch_kma_future_ncm(lat, lon, auth_key, base_date_kst, as_of_kst=None):
     df = pd.DataFrame(rows)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values('timestamp').reset_index(drop=True)
-    df = _fill_missing_hours(df, target_hours, 'KMA NCM')
 
     # ── 5) 후처리 ──
     if 'solar_rad' in df.columns:
@@ -921,39 +865,40 @@ def fetch_kma_future_ncm_wind(auth_key, base_date_kst, as_of_kst=None):
     result_rows = []
     for ts in all_timestamps:
         u_sum = 0.0
-        v_sum = 0.0
+        v_sum = 0.0  
         w_sum = 0.0
-        zone_data = {}
 
         for name, weight, df_z in zone_dfs:
             if ts in df_z.index:
                 row = df_z.loc[ts]
+                # wind_spd + wd_sin/cos → u, v 복원해서 가중 합산
                 spd = row["wind_spd_north"]
                 wd_sin = row["wd_sin_north"]
                 wd_cos = row["wd_cos_north"]
-
+                
+                # wd_sin = sin(wind_dir_rad), wd_cos = cos(wind_dir_rad)
+                # u = spd * sin(dir), v = spd * cos(dir)  (방향성분 보존)
                 u_sum += weight * spd * wd_sin
                 v_sum += weight * spd * wd_cos
                 w_sum += weight
-                zone_data[name] = (round(spd, 2), round(wd_sin, 4), round(wd_cos, 4))
 
         if w_sum == 0:
             continue
 
+        # 가중치 재정규화 (일부 권역 누락 시)
         u_avg = u_sum / w_sum
         v_avg = v_sum / w_sum
 
+        # 합성 풍속 & 풍향 복원
         wind_spd = np.sqrt(u_avg**2 + v_avg**2)
-        wind_dir_rad = np.arctan2(u_avg, v_avg)
+        wind_dir_rad = np.arctan2(u_avg, v_avg)  # sin/cos 순서 유지
 
-        row_dict = {
+        result_rows.append({
             "timestamp": ts,
             "wind_spd_north": round(wind_spd, 2),
             "wd_sin_north": round(np.sin(wind_dir_rad), 4),
             "wd_cos_north": round(np.cos(wind_dir_rad), 4),
-        }
-        _apply_zone_data(zone_data, row_dict)
-        result_rows.append(row_dict)
+        })
 
     if not result_rows:
         return pd.DataFrame()
@@ -1095,7 +1040,6 @@ def fetch_kma_future_ncm_north_single(lat, lon, auth_key, base_date_kst, as_of_k
     df = pd.DataFrame(rows)
     df['timestamp'] = pd.to_datetime(df['timestamp'])
     df = df.sort_values('timestamp').reset_index(drop=True)
-    df = _fill_missing_hours(df, target_hours, 'KMA NCM north')
 
     if 'u_wind' in df.columns and 'v_wind' in df.columns:
         df['wind_spd_north'] = np.sqrt(df['u_wind']**2 + df['v_wind']**2).round(2)
@@ -1249,21 +1193,19 @@ def fetch_kma_vilage_wind(auth_key, base_date_kst, as_of_kst=None):
         b_time = f"{cycle_dt.hour:02d}00"
 
         point_uvs = []
-        point_data = {}
         api_error  = False
 
         for pt in _VILAGE_GRID_POINTS:
             items = _fetch_vilage_raw(pt['nx'], pt['ny'], b_date, b_time, auth_key)
             if items == "LIMIT":
                 logger.debug(f"[VilageFcst] {b_date} {b_time} 3일 한계 → 수집 중단")
-                return pd.DataFrame()
+                return pd.DataFrame()   # 이하 모든 사이클도 실패 확정
             if items is None:
                 api_error = True
                 break
             df_uv = _parse_vilage_wind(items, target_date_str)
             if not df_uv.empty:
                 point_uvs.append(df_uv)
-                point_data[pt['name']] = df_uv
 
         if api_error:
             logger.debug(f"[VilageFcst] {b_date} {b_time} API 오류 → 이전 사이클")
@@ -1272,7 +1214,7 @@ def fetch_kma_vilage_wind(auth_key, base_date_kst, as_of_kst=None):
             logger.debug(f"[VilageFcst] {b_date} {b_time} 대상 날짜({target_date_str}) 없음 → 이전 사이클")
             continue
 
-        # 등가중 평균 (blended 출력 — 기존 방식 유지)
+        # 등가중 평균 (가중치 논의 전까지 임시)
         if len(point_uvs) == 1:
             df_avg = point_uvs[0]
         else:
@@ -1290,18 +1232,6 @@ def fetch_kma_vilage_wind(auth_key, base_date_kst, as_of_kst=None):
             'wd_sin_north_v':   wd_sin,
             'wd_cos_north_v':   wd_cos,
         })
-
-        # 권역별 개별 저장 (미래 재학습용)
-        for pt_name, df_uv in point_data.items():
-            suffix = 'east_v' if _ZONE_EAST in pt_name else 'west_v'
-            u_z = df_uv['UUU']
-            v_z = df_uv['VVV']
-            spd_z = np.sqrt(u_z**2 + v_z**2).round(2)
-            dir_z = (270 - np.degrees(np.arctan2(v_z, u_z))) % 360
-            result[f'wind_spd_{suffix}'] = spd_z
-            result[f'wd_sin_{suffix}']   = np.sin(np.radians(dir_z)).round(4)
-            result[f'wd_cos_{suffix}']   = np.cos(np.radians(dir_z)).round(4)
-
         result.index = result.index.strftime('%Y-%m-%d %H:%M:%S')
         result.index.name = 'timestamp'
 

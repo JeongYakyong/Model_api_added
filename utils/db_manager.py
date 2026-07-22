@@ -56,6 +56,12 @@ class JejuEnergyDB:
                 wind_spd_north REAL,
                 wd_sin_north REAL,
                 wd_cos_north REAL,
+                wind_spd_east REAL,
+                wd_sin_east REAL,
+                wd_cos_east REAL,
+                wind_spd_west REAL,
+                wd_sin_west REAL,
+                wd_cos_west REAL,
                 -- Stored Derived Features
                 Solar_Capacity_Est REAL,
                 Wind_Capacity_Est REAL,
@@ -90,6 +96,21 @@ class JejuEnergyDB:
                 wind_spd_north REAL,
                 wd_sin_north REAL,
                 wd_cos_north REAL,
+                wind_spd_north_v REAL,
+                wd_sin_north_v REAL,
+                wd_cos_north_v REAL,
+                wind_spd_east REAL,
+                wd_sin_east REAL,
+                wd_cos_east REAL,
+                wind_spd_west REAL,
+                wd_sin_west REAL,
+                wd_cos_west REAL,
+                wind_spd_east_v REAL,
+                wd_sin_east_v REAL,
+                wd_cos_east_v REAL,
+                wind_spd_west_v REAL,
+                wd_sin_west_v REAL,
+                wd_cos_west_v REAL,
                 -- Capacity (copied from latest historical)
                 Solar_Capacity_Est REAL,
                 Wind_Capacity_Est REAL,
@@ -103,15 +124,38 @@ class JejuEnergyDB:
         """)
           # 기존 DB 마이그레이션: 컬럼이 없으면 추가
 
-        for col in [  'HVDC_Total', 'LNG_Gen', 'Oil_Gen','wind_spd_north', 'wd_sin_north', 'wd_cos_north']:
+        for col in ['HVDC_Total', 'LNG_Gen', 'Oil_Gen', 'wind_spd_north', 'wd_sin_north', 'wd_cos_north']:
             try:
                 cursor.execute(f"ALTER TABLE historical_data ADD COLUMN {col} REAL")
             except Exception:
-                pass  # 이미 존재하면 무시
-            # 2. 예보 테이블 컬럼 추가 (중요: 여기서 north 컬럼이 누락되지 않았는지 확인)
+                pass
             try:
-                if "north" in col or col in ['Solar_Capacity_Est', 'Wind_Capacity_Est']: # 필요한 컬럼들
+                if "north" in col or col in ['Solar_Capacity_Est', 'Wind_Capacity_Est']:
                     cursor.execute(f"ALTER TABLE forecast_data ADD COLUMN {col} REAL")
+            except Exception:
+                pass
+
+        for col in ['wind_spd_north_v', 'wd_sin_north_v', 'wd_cos_north_v']:
+            try:
+                cursor.execute(f"ALTER TABLE forecast_data ADD COLUMN {col} REAL")
+            except Exception:
+                pass
+
+        zone_cols = ['wind_spd_east', 'wd_sin_east', 'wd_cos_east',
+                     'wind_spd_west', 'wd_sin_west', 'wd_cos_west']
+        for col in zone_cols:
+            try:
+                cursor.execute(f"ALTER TABLE historical_data ADD COLUMN {col} REAL")
+            except Exception:
+                pass
+            try:
+                cursor.execute(f"ALTER TABLE forecast_data ADD COLUMN {col} REAL")
+            except Exception:
+                pass
+        for col in ['wind_spd_east_v', 'wd_sin_east_v', 'wd_cos_east_v',
+                    'wind_spd_west_v', 'wd_sin_west_v', 'wd_cos_west_v']:
+            try:
+                cursor.execute(f"ALTER TABLE forecast_data ADD COLUMN {col} REAL")
             except Exception:
                 pass
 
@@ -145,6 +189,8 @@ class JejuEnergyDB:
             'solar_rad', 'total_cloud', 'midlow_cloud', 
             'wd_sin', 'wd_cos',
             'wind_spd_north', 'wd_sin_north', 'wd_cos_north',
+            'wind_spd_east', 'wd_sin_east', 'wd_cos_east',
+            'wind_spd_west', 'wd_sin_west', 'wd_cos_west',
             'Solar_Capacity_Est', 'Wind_Capacity_Est',
             'Solar_Utilization', 'Wind_Utilization',
             'HVDC_Total', 'LNG_Gen', 'Oil_Gen',
@@ -278,6 +324,11 @@ class JejuEnergyDB:
             'humidity', 'solar_rad', 'total_cloud', 'midlow_cloud',
             'wd_sin', 'wd_cos',
             'wind_spd_north', 'wd_sin_north', 'wd_cos_north',
+            'wind_spd_east', 'wd_sin_east', 'wd_cos_east',
+            'wind_spd_west', 'wd_sin_west', 'wd_cos_west',
+            'wind_spd_north_v', 'wd_sin_north_v', 'wd_cos_north_v',
+            'wind_spd_east_v', 'wd_sin_east_v', 'wd_cos_east_v',
+            'wind_spd_west_v', 'wd_sin_west_v', 'wd_cos_west_v',
             'Solar_Capacity_Est', 'Wind_Capacity_Est',
             'est_Solar_Utilization', 'est_Wind_Utilization',
             'forecast_time', 'updated_at'
