@@ -104,13 +104,22 @@ EDA_ONLY_COLUMNS = {'HVDC_Total', 'LNG_Gen', 'Oil_Gen'}
 PREDICTION_OUTPUT_COLUMNS = {'est_Solar_Utilization', 'est_Wind_Utilization'}
 
 # VilageFcst 보조 예보 (_v). 있으면 KIMG 대신 쓰고 없으면 KIMG로 넘어가는 선택 항목.
-# backfill 기한이 2일이라 과거 날짜는 수집 자체가 불가능하므로,
-# 데이터 완결성 검사에서 제외해야 한다.
-OPTIONAL_FORECAST_COLUMNS = {
+# backfill 기한이 2일이라 과거 날짜는 수집 자체가 불가능하다.
+VILAGE_FORECAST_COLUMNS = {
     'wind_spd_north_v', 'wd_sin_north_v', 'wd_cos_north_v',
+}
+
+# 권역별(동/서) 분리 저장. 서빙에는 쓰이지 않고 미래 재학습용으로만 쌓는다.
+# 권역 분리 기능 도입 이전 날짜는 비어 있는 것이 정상.
+ZONE_DETAIL_COLUMNS = {
+    'wind_spd_east', 'wd_sin_east', 'wd_cos_east',
+    'wind_spd_west', 'wd_sin_west', 'wd_cos_west',
     'wind_spd_east_v', 'wd_sin_east_v', 'wd_cos_east_v',
     'wind_spd_west_v', 'wd_sin_west_v', 'wd_cos_west_v',
 }
+
+# 데이터 완결성 검사에서 제외할 선택 항목 전체
+OPTIONAL_FORECAST_COLUMNS = VILAGE_FORECAST_COLUMNS | ZONE_DETAIL_COLUMNS
 
 COLORS = {
     'solar_real': 'darkorange',
@@ -222,6 +231,89 @@ def check_data_status(df, key_columns=None):
         "incomplete_details": incomplete_details,
         "key_columns_checked": key_columns
     }
+
+
+def get_model_data_status(db, target_date):
+    """
+    예측 대상일 기준 모델 입력 데이터 상태 점검. full.py / lite.py 공용.
+
+    판정 기준은 run_model_prediction이 실제로 쓰는 get_model_input()과 맞춘다.
+    과거 336시간은 실측(ASOS) 우선이되 빈 시각은 forecast가 채우므로,
+    실측만으로 336시간이 안 되면 forecast 보충분까지 합쳐서 센다.
+    이때 실측 결측은 forecast가 메우므로 세지 않고, 대신 보충 구간에
+    이전 날짜 예측값(est_Utilization)이 있는지를 본다.
+
+    결측은 두 구간 모두 '결측이 있는 행 수(=시간)' 기준으로 집계한다.
+    """
+    past_start = f"{target_date - timedelta(days=14)} 00:00:00"
+    past_end   = f"{target_date - timedelta(days=1)} 23:00:00"
+    fut_start  = f"{target_date} 00:00:00"
+    fut_end    = f"{target_date} 23:00:00"
+
+    past_df   = db.get_historical(past_start, past_end)
+    future_df = db.get_forecast(fut_start, fut_end)
+
+    past_hours   = len(past_df) if not past_df.empty else 0
+    future_hours = len(future_df) if not future_df.empty else 0
+
+    exclude = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS | OPTIONAL_FORECAST_COLUMNS
+
+    def missing_hours(df, columns=None):
+        """결측이 하나라도 있는 행의 개수"""
+        if df.empty:
+            return 0
+        target = df[columns] if columns else df.drop(columns=exclude, errors='ignore')
+        return int(target.isna().any(axis=1).sum())
+
+    future_missing = missing_hours(future_df)
+    future_ok = future_hours >= 24 and future_missing == 0
+
+    needs_forecast_supplement = past_hours < 336
+
+    if not needs_forecast_supplement:
+        past_missing        = missing_hours(past_df)
+        past_combined_hours = past_hours
+        forecast_supplement = 0
+        est_util_missing    = 0
+        past_ok    = past_missing == 0
+        past_label = f"{past_hours} / 336시간"
+    else:
+        past_fore_df = db.get_forecast(past_start, past_end)
+        hist_idx = set(past_df.index) if not past_df.empty else set()
+        fore_idx = set(past_fore_df.index) if not past_fore_df.empty else set()
+        past_combined_hours = len(hist_idx | fore_idx)
+        forecast_supplement = past_combined_hours - past_hours
+
+        # forecast로만 채워지는 시각에 이전 날짜 예측값이 있어야 모델이 돌아간다
+        fore_only = fore_idx - hist_idx
+        if fore_only and not past_fore_df.empty:
+            fore_only_df = past_fore_df.loc[past_fore_df.index.isin(fore_only)]
+            est_util_missing = missing_hours(
+                fore_only_df, ['est_Solar_Utilization', 'est_Wind_Utilization']
+            )
+        else:
+            est_util_missing = 0
+
+        past_missing = 0  # 실측 결측은 forecast가 보충하므로 세지 않음
+        past_ok      = past_combined_hours >= 336 and est_util_missing == 0
+        past_label   = f"{past_hours} + {forecast_supplement}보충"
+
+    past_gap   = max(336 - past_combined_hours, 0)
+    future_gap = max(24 - future_hours, 0)
+
+    return dict(
+        past_df=past_df, future_df=future_df,
+        past_hours=past_hours, future_hours=future_hours,
+        past_missing=past_missing, future_missing=future_missing,
+        past_ok=past_ok, future_ok=future_ok,
+        past_label=past_label,
+        past_gap=past_gap, future_gap=future_gap,
+        needs_forecast_supplement=needs_forecast_supplement,
+        past_combined_hours=past_combined_hours,
+        forecast_supplement=forecast_supplement,
+        est_util_missing=est_util_missing,
+        can_quick=past_gap <= 48,
+    )
 
 
 # ==========================================

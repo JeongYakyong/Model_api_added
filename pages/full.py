@@ -28,7 +28,7 @@ from utils.api_fetchers import fetch_kpx_past_15min
 from models.architecture import PatchTST_Weather_Model
 from utils.chart_helpers import (
     EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, OPTIONAL_FORECAST_COLUMNS, COLORS,
-    check_data_status, date_range_selector,
+    check_data_status, get_model_data_status, date_range_selector,
     merge_actual_and_forecast, plot_actual_vs_pred,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
     init_warning_state, draw_warning_zones,
@@ -405,65 +405,28 @@ elif menu == "Option B : 발전량 예측":
     else:
         st.caption(f"모델 추론에 필요한 데이터: 과거 실측 336시간 + 미래 예보 24시간 (대상일: {target_date}, **D+{day_offset} 롤링 예측**)")
     
-    # 과거 실측 데이터 범위
-    past_end = f"{target_date - timedelta(days=1)} 23:00:00"
-    past_start = f"{target_date - timedelta(days=14)} 00:00:00"
-    past_df = db.get_historical(past_start, past_end)
-    
-    # 미래 예보 데이터 범위
-    future_start = f"{target_date} 00:00:00"
-    future_end = f"{target_date} 23:00:00"
-    future_df = db.get_forecast(future_start, future_end)
-    
-    past_hours = len(past_df) if not past_df.empty else 0
-    future_hours = len(future_df) if not future_df.empty else 0
-    
     EXCLUDE_FROM_CHECK = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS | OPTIONAL_FORECAST_COLUMNS
 
-    # past 구간에 forecast 보충이 필요한지 판단
-    # D+0/D+1이라도 오늘 아직 안 지난 시간이 past에 포함되면 보충 필요
-    needs_forecast_supplement = past_hours < 336
-    
-    if not needs_forecast_supplement:
-        # ── historical만으로 336시간 충족 ──
-        past_missing = (
-            int(past_df.drop(columns=EXCLUDE_FROM_CHECK, errors='ignore').isna().any(axis=1).sum())
-            if not past_df.empty else 0
-        )
-        future_missing = (
-            int(future_df.drop(columns=EXCLUDE_FROM_CHECK, errors='ignore').isna().any(axis=1).sum())
-            if not future_df.empty else 0
-        )
-        
-        past_ok = past_hours >= 336 and past_missing == 0
-        past_label = f"{past_hours} / 336시간"
-        future_ok = future_hours >= 24 and future_missing == 0
-        
-    else:
-        # ── forecast 보충 필요 (D+1 야간 또는 D+2/D+3) ──
-        past_fore_df = db.get_forecast(past_start, past_end)
-        past_hist_hours = set(past_df.index) if not past_df.empty else set()
-        past_fore_hours = set(past_fore_df.index) if not past_fore_df.empty else set()
-        past_combined_hours = len(past_hist_hours | past_fore_hours)
-        
-        # forecast 보충 구간에 est_Utilization이 있는지 확인
-        forecast_only_hours = past_fore_hours - past_hist_hours
-        if forecast_only_hours and not past_fore_df.empty:
-            fore_only_df = past_fore_df.loc[past_fore_df.index.isin(forecast_only_hours)]
-            est_util_missing = fore_only_df[['est_Solar_Utilization', 'est_Wind_Utilization']].isnull().sum().sum()
-        else:
-            est_util_missing = 0
-        
-        past_missing = 0  # historical 결측은 forecast가 보충하므로 무시
-        future_missing = (
-            int(future_df.drop(columns=EXCLUDE_FROM_CHECK, errors='ignore').isna().sum().sum())
-            if not future_df.empty else 0
-        )
-        
-        past_ok = past_combined_hours >= 336 and est_util_missing == 0
-        forecast_supplement = past_combined_hours - past_hours
-        past_label = f"{past_hours} + {forecast_supplement}보충"
-        future_ok = future_hours >= 24 and future_missing == 0
+    past_start = f"{target_date - timedelta(days=14)} 00:00:00"
+    past_end = f"{target_date - timedelta(days=1)} 23:00:00"
+
+    # 데이터 상태 판정 (lite.py와 동일 기준 — chart_helpers.get_model_data_status)
+    status = get_model_data_status(db, target_date)
+
+    past_df        = status['past_df']
+    future_df      = status['future_df']
+    past_hours     = status['past_hours']
+    future_hours   = status['future_hours']
+    past_missing   = status['past_missing']
+    future_missing = status['future_missing']
+    past_ok        = status['past_ok']
+    future_ok      = status['future_ok']
+    past_label     = status['past_label']
+
+    needs_forecast_supplement = status['needs_forecast_supplement']
+    past_combined_hours       = status['past_combined_hours']
+    forecast_supplement       = status['forecast_supplement']
+    est_util_missing          = status['est_util_missing']
 
     col1, col2, col3, col4 = st.columns(4)
     
@@ -482,15 +445,15 @@ elif menu == "Option B : 발전량 예측":
     )
     
     col3.metric(
-        "실측 결측치", 
-        f"{past_missing}건",
+        "과거 결측",
+        f"{past_missing}h",
         "없음" if past_missing == 0 else "부족",
         delta_color="normal" if past_missing == 0 else "inverse"
     )
-    
+
     col4.metric(
-        "예보 결측치", 
-        f"{future_missing}건",
+        "예보 결측",
+        f"{future_missing}h",
         "없음" if future_missing == 0 else "API 재수집 필요",
         delta_color="normal" if future_missing == 0 else "inverse"
     )
@@ -537,14 +500,14 @@ elif menu == "Option B : 발전량 예측":
             fetch_desc = []
             if needs_past_fetch:
                 if has_past_missing and past_gap == 0:
-                    fetch_desc.append(f"실측 결측치 {past_missing}건 보충 ({hist_start}~{hist_end})")
+                    fetch_desc.append(f"과거 결측 {past_missing}h 보충 ({hist_start}~{hist_end})")
                 else:
                     fetch_desc.append(f"실측 {past_gap}시간 부족 ({hist_start}~{hist_end})")
             
             if needs_future_fetch:
                 # 미래 데이터 결측치 안내 로직 추가
                 if has_future_missing and future_gap == 0:
-                    fetch_desc.append(f"예보 결측치 {future_missing}건 보충 ({target_str})")
+                    fetch_desc.append(f"예보 결측 {future_missing}h 보충 ({target_str})")
                 else:
                     fetch_desc.append(f"예보 {future_gap}시간 부족 ({target_str})")
             
@@ -589,7 +552,7 @@ elif menu == "Option B : 발전량 예측":
                     if need_dates:
                         first_date = need_dates[0][:10]
                         st.warning(
-                            f"⚡ **이전 날짜 예측 필요**: 보충 구간에 예측값(est_Utilization)이 {int(est_util_missing)}건 비어있습니다.\n\n"
+                            f"⚡ **이전 날짜 예측 필요**: 보충 구간에 예측값(est_Utilization)이 {int(est_util_missing)}h 비어있습니다.\n\n"
                             f"**{first_date}부터 순서대로 예측을 먼저 실행**해 주세요.")
             
             if future_hours < 24:

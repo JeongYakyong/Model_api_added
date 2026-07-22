@@ -20,7 +20,7 @@ from utils.data_pipeline import (
 from utils.api_fetchers import fetch_kpx_past_15min
 from utils.chart_helpers import (
     EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, OPTIONAL_FORECAST_COLUMNS, COLORS,
-    merge_actual_and_forecast,
+    get_model_data_status, merge_actual_and_forecast,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
     init_warning_state, draw_warning_zones,
     render_warning_threshold_inputs, commit_warning_thresholds,
@@ -55,51 +55,36 @@ EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS | OPTIONAL_FORECAST_COLUM
 # ==========================================
 
 def get_data_status(target_date):
-    """예측 대상일 기준 과거 실측 / 미래 예보 데이터 상태 점검"""
-    past_end   = f"{target_date - timedelta(days=1)} 23:00:00"
-    past_start = f"{target_date - timedelta(days=14)} 00:00:00"
-    fut_start  = f"{target_date} 00:00:00"
-    fut_end    = f"{target_date} 23:00:00"
+    """
+    예측 대상일 기준 과거 실측 / 미래 예보 데이터 상태 점검.
 
-    past_df = db.get_historical(past_start, past_end)
-    fut_df  = db.get_forecast(fut_start, fut_end)
-
-    past_hours = len(past_df) if not past_df.empty else 0
-    fut_hours  = len(fut_df)  if not fut_df.empty  else 0
-
-    past_missing = int(
-        past_df.drop(columns=EXCLUDE, errors='ignore').isna().any(axis=1).sum()
-    ) if not past_df.empty else 0
-    fut_missing = int(
-        fut_df.drop(columns=EXCLUDE, errors='ignore').isna().any(axis=1).sum()
-    ) if not fut_df.empty else 0
-
-    past_ok  = (past_hours >= 336) and (past_missing == 0)
-    fut_ok   = (fut_hours  >= 24)  and (fut_missing  == 0)
-    past_gap = max(336 - past_hours, 0)
-    fut_gap  = max(24  - fut_hours,  0)
-    can_quick = (past_gap <= 48)
+    판정은 full.py와 동일한 공통 함수를 쓴다. 이 페이지에서 쓰는 짧은 키 이름
+    (fut_*)으로만 바꿔서 돌려준다.
+    """
+    s = get_model_data_status(db, target_date)
 
     return dict(
-        past_df=past_df, fut_df=fut_df,
-        past_hours=past_hours, fut_hours=fut_hours,
-        past_missing=past_missing, fut_missing=fut_missing,
-        past_ok=past_ok, fut_ok=fut_ok,
-        past_gap=past_gap, fut_gap=fut_gap,
-        can_quick=can_quick,
+        past_df=s['past_df'], fut_df=s['future_df'],
+        past_hours=s['past_hours'], fut_hours=s['future_hours'],
+        past_missing=s['past_missing'], fut_missing=s['future_missing'],
+        past_ok=s['past_ok'], fut_ok=s['future_ok'],
+        past_gap=s['past_gap'], fut_gap=s['future_gap'],
+        past_label=s['past_label'],
+        est_util_missing=s['est_util_missing'],
+        can_quick=s['can_quick'],
     )
 
 
 def render_metrics(s):
     """4개 메트릭 카드 렌더링"""
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("과거 실측",  f"{s['past_hours']} / 336h",
+    c1.metric("과거 실측",  s['past_label'],
               "정상" if s['past_ok'] else "부족",
               delta_color="normal" if s['past_ok'] else "inverse")
     c2.metric("미래 예보",  f"{s['fut_hours']} / 24h",
               "정상" if s['fut_ok'] else "부족",
               delta_color="normal" if s['fut_ok'] else "inverse")
-    c3.metric("실측 결측",  f"{s['past_missing']}h",
+    c3.metric("과거 결측",  f"{s['past_missing']}h",
               "없음" if s['past_missing'] == 0 else "있음",
               delta_color="normal" if s['past_missing'] == 0 else "inverse")
     c4.metric("예보 결측",  f"{s['fut_missing']}h",
