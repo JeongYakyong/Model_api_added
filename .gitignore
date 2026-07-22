@@ -210,5 +210,14 @@ __marimo__/
 database/jeju_energy.db
 database/*.db
 
+# 로그인 토큰 (서버·개발PC가 각자 보유)
+database/.auth_token
+
+# Gemini 브리핑 캐시 (실행 중 생성)
+briefing_storage.json
+
+# 에디터 백업 파일
+*.tmp.*
+
 # Claude Code
 CLAUDE.md
