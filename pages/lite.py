@@ -19,7 +19,7 @@ from utils.data_pipeline import (
 )
 from utils.api_fetchers import fetch_kpx_past_15min
 from utils.chart_helpers import (
-    EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, COLORS,
+    EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, OPTIONAL_FORECAST_COLUMNS, COLORS,
     merge_actual_and_forecast,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
     init_warning_state, draw_warning_zones,
@@ -47,7 +47,7 @@ if 'authenticated' not in st.session_state or not st.session_state['authenticate
 db = st.session_state['shared_db']
 assets = st.session_state['shared_assets']
 
-EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS
+EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS | OPTIONAL_FORECAST_COLUMNS
         
 
 # ==========================================

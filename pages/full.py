@@ -27,7 +27,7 @@ from utils.data_pipeline import (
 from utils.api_fetchers import fetch_kpx_past_15min
 from models.architecture import PatchTST_Weather_Model
 from utils.chart_helpers import (
-    EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, COLORS,
+    EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, OPTIONAL_FORECAST_COLUMNS, COLORS,
     check_data_status, date_range_selector,
     merge_actual_and_forecast, plot_actual_vs_pred,
     PLOT_OPTIONS, ACTUAL_LABEL_MAP, ACTUAL_MAP, EST_COLORS,
@@ -418,7 +418,7 @@ elif menu == "Option B : 발전량 예측":
     past_hours = len(past_df) if not past_df.empty else 0
     future_hours = len(future_df) if not future_df.empty else 0
     
-    EXCLUDE_FROM_CHECK = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS
+    EXCLUDE_FROM_CHECK = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS | OPTIONAL_FORECAST_COLUMNS
 
     # past 구간에 forecast 보충이 필요한지 판단
     # D+0/D+1이라도 오늘 아직 안 지난 시간이 past에 포함되면 보충 필요

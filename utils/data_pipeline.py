@@ -690,7 +690,11 @@ def fill_hourly_gaps(df, start_str, end_str):
     filled = df.reindex(full_index_str)
     filled.index = full_index                      # 시간 보간을 위해 잠시 DatetimeIndex로
 
-    numeric_cols = filled.select_dtypes(include='number').columns
+    # 선택 예보(_v)는 보간하지 않는다. 커버 구간 경계에서 가짜 값이 번져
+    # "있는 시각만 쓴다"는 원칙이 깨지기 때문.
+    from utils.chart_helpers import OPTIONAL_FORECAST_COLUMNS
+    numeric_cols = [c for c in filled.select_dtypes(include='number').columns
+                    if c not in OPTIONAL_FORECAST_COLUMNS]
     filled[numeric_cols] = filled[numeric_cols].interpolate(
         method='time', limit=_SERVING_INTERP_LIMIT, limit_direction='both'
     )
@@ -760,6 +764,17 @@ def run_model_prediction(target_date, db, assets):
     df['wind_spd_sq'] = df['wind_spd'] ** 2
     df['wind_spd_cu'] = df['wind_spd'] ** 3
     
+    # ── 북쪽 풍속 소스 결정 (VilageFcst 우선, 시각 단위 폴백) ──
+    # _v는 선택 항목이다. backfill 기한이 2일이라 과거 날짜는 아예 비어 있으므로,
+    # 값이 있는 시각만 KIMG(_north) 위에 덮어쓰고 나머지는 KIMG를 그대로 쓴다.
+    # 반드시 아래 fillna(0) 전에 처리할 것. 이후에 하면 _v의 결측이 0으로 둔갑해
+    # 풍속이 통째로 0으로 뭉개진다.
+    for base_col, v_col in [('wind_spd_north', 'wind_spd_north_v'),
+                            ('wd_sin_north',   'wd_sin_north_v'),
+                            ('wd_cos_north',   'wd_cos_north_v')]:
+        if v_col in df.columns and base_col in df.columns:
+            df[base_col] = df[v_col].combine_first(df[base_col])
+
     # 1. 과거/미래 분리
     past_df = df.iloc[:seq_len_max]
     future_df = df.iloc[seq_len_max:total_len]
@@ -815,17 +830,12 @@ def run_model_prediction(target_date, db, assets):
     df_solar[future_features_solar] = scaler_solar.transform(df_solar[future_features_solar])
     
     # 풍력 (북쪽 데이터 덮어쓰기 후 파생변수 재계산)
-    # VilageFcst(_v) 우선, 없으면 KIMG(_north) 폴백
+    # _north는 위에서 이미 VilageFcst(_v)와 시각 단위로 합쳐진 상태
     df_wind = df.copy()
-    if ('wind_spd_north_v' in df_wind.columns
-            and df_wind['wind_spd_north_v'].notna().any()):
-        df_wind['wind_spd'] = df_wind['wind_spd_north_v']
-        df_wind['wd_sin']   = df_wind['wd_sin_north_v']
-        df_wind['wd_cos']   = df_wind['wd_cos_north_v']
-    elif 'wind_spd_north' in df_wind.columns:
+    if 'wind_spd_north' in df_wind.columns:
         df_wind['wind_spd'] = df_wind['wind_spd_north']
         df_wind['wd_sin']   = df_wind['wd_sin_north']
-        df_wind['wd_cos']   = df_wind['wd_cos_north']            
+        df_wind['wd_cos']   = df_wind['wd_cos_north']
     # ── wind_zone 생성 (클리핑 전 원본 기준) ──
     conditions = [
         df_wind['wind_spd'] < 15,
@@ -941,11 +951,13 @@ def run_model_prediction(target_date, db, assets):
 def run_today_prediction(db, assets):
     """오늘 날짜 예측 실행. '바로 예측' 버튼에서 호출."""
     import streamlit as st
-    from utils.chart_helpers import EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS
+    from utils.chart_helpers import (
+        EDA_ONLY_COLUMNS, PREDICTION_OUTPUT_COLUMNS, OPTIONAL_FORECAST_COLUMNS,
+    )
     from utils.log_utils import log_capture
 
     today = datetime.now().date()
-    EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS
+    EXCLUDE = EDA_ONLY_COLUMNS | PREDICTION_OUTPUT_COLUMNS | OPTIONAL_FORECAST_COLUMNS
 
     # 과거 데이터 상태 간단 점검
     past_df = db.get_historical(

@@ -103,6 +103,15 @@ def draw_danger_zones(fig, df, condition_series, fill_color,
 EDA_ONLY_COLUMNS = {'HVDC_Total', 'LNG_Gen', 'Oil_Gen'}
 PREDICTION_OUTPUT_COLUMNS = {'est_Solar_Utilization', 'est_Wind_Utilization'}
 
+# VilageFcst 보조 예보 (_v). 있으면 KIMG 대신 쓰고 없으면 KIMG로 넘어가는 선택 항목.
+# backfill 기한이 2일이라 과거 날짜는 수집 자체가 불가능하므로,
+# 데이터 완결성 검사에서 제외해야 한다.
+OPTIONAL_FORECAST_COLUMNS = {
+    'wind_spd_north_v', 'wd_sin_north_v', 'wd_cos_north_v',
+    'wind_spd_east_v', 'wd_sin_east_v', 'wd_cos_east_v',
+    'wind_spd_west_v', 'wd_sin_west_v', 'wd_cos_west_v',
+}
+
 COLORS = {
     'solar_real': 'darkorange',
     'solar_est': 'orange',          # dark mode 호환성 향상을 위한 색변경
@@ -158,8 +167,11 @@ ACTUAL_MAP = {
 def check_data_status(df, key_columns=None):
     """
     데이터프레임의 무결성을 검사하는 함수.
-    EDA_ONLY_COLUMNS에 포함된 컬럼은 결측치 검사에서 제외됩니다.
+    EDA_ONLY_COLUMNS와 OPTIONAL_FORECAST_COLUMNS에 포함된 컬럼은
+    결측치 검사에서 제외됩니다.
     """
+    skip_columns = EDA_ONLY_COLUMNS | OPTIONAL_FORECAST_COLUMNS
+
     if df.empty:
         return {
             "status": "Empty",
@@ -175,7 +187,7 @@ def check_data_status(df, key_columns=None):
     if key_columns is None:
         key_columns = [
             c for c in df.select_dtypes(include=[np.number]).columns.tolist()
-            if c not in EDA_ONLY_COLUMNS
+            if c not in skip_columns
         ]
     key_columns = [c for c in key_columns if c in df.columns]
 
@@ -183,8 +195,8 @@ def check_data_status(df, key_columns=None):
     expected_range = pd.date_range(start=df.index.min(), end=df.index.max(), freq='1h')
     missing_timestamps = expected_range.difference(df.index)
 
-    # 2. 전체 컬럼 결측치 (EDA 참고용 제외)
-    check_cols = [c for c in df.columns if c not in EDA_ONLY_COLUMNS]
+    # 2. 전체 컬럼 결측치 (EDA 참고용·선택 예보 제외)
+    check_cols = [c for c in df.columns if c not in skip_columns]
     nan_counts = df[check_cols].isna().sum()
     nan_counts = nan_counts[nan_counts > 0].to_dict()
 
