@@ -1,13 +1,5 @@
 streamlit
 pandas
-numpy
-torch
-joblib
-pvlib
-matplotlib
 plotly
-scikit-learn
-statsmodels
 requests
-urllib3
 python-dotenv
