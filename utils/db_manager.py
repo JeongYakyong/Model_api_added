@@ -1,8 +1,12 @@
 import sqlite3
 import os
+import pandas as pd
 from datetime import datetime
 
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database", "jeju_energy.db")
+
+HIST_COLS = ["real_demand", "real_renew_gen", "real_solar_gen", "real_wind_gen"]
+FCST_COLS = ["est_demand", "est_renew_gen", "est_solar_gen", "est_wind_gen", "est_net_load"]
 
 
 def _ensure_columns(con, table, columns):
@@ -21,76 +25,86 @@ def init_db(db_path=DB_PATH):
     con.execute("""
         CREATE TABLE IF NOT EXISTS historical_data (
             timestamp TEXT PRIMARY KEY,
-            real_demand REAL,
             updated_at TEXT
         )
     """)
     con.execute("""
         CREATE TABLE IF NOT EXISTS forecast_data (
             timestamp TEXT PRIMARY KEY,
-            est_demand REAL,
             horizon_d INTEGER,
             base TEXT,
             updated_at TEXT
         )
     """)
-    _ensure_columns(con, "historical_data", [("real_demand", "REAL"), ("updated_at", "TEXT")])
+    _ensure_columns(con, "historical_data", [(c, "REAL") for c in HIST_COLS] + [("updated_at", "TEXT")])
     _ensure_columns(con, "forecast_data",
-                    [("est_demand", "REAL"), ("horizon_d", "INTEGER"), ("base", "TEXT"), ("updated_at", "TEXT")])
+                    [(c, "REAL") for c in FCST_COLS] + [("horizon_d", "INTEGER"), ("base", "TEXT"), ("updated_at", "TEXT")])
     con.commit()
     con.close()
 
 
 def save_historical(df, db_path=DB_PATH):
-    """실측 수요 upsert — 기존 값은 COALESCE 로 보존(부분 재수집 시 NULL 로 덮지 않음)."""
+    """실측 upsert — 기존 값은 COALESCE 로 보존(부분 재수집 시 NULL 로 덮지 않음)."""
     if df.empty:
         return
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     con = sqlite3.connect(db_path)
+    collist = ", ".join(HIST_COLS)
+    placeholders = ", ".join(["?"] * len(HIST_COLS))
+    coalesce_set = ", ".join(f"{c} = COALESCE(excluded.{c}, historical_data.{c})" for c in HIST_COLS)
     for timestamp, row in df.iterrows():
-        con.execute("""
-            INSERT INTO historical_data (timestamp, real_demand, updated_at)
-            VALUES (?, ?, ?)
+        con.execute(f"""
+            INSERT INTO historical_data (timestamp, {collist}, updated_at)
+            VALUES (?, {placeholders}, ?)
             ON CONFLICT(timestamp) DO UPDATE SET
-                real_demand = COALESCE(excluded.real_demand, historical_data.real_demand),
+                {coalesce_set},
                 updated_at = excluded.updated_at
-        """, (timestamp, row['real_demand'], now))
+        """, (timestamp, *[row.get(c) for c in HIST_COLS], now))
     con.commit()
     con.close()
 
 
 def save_forecast(df, db_path=DB_PATH):
-    """예측 수요 upsert — jeju_model 에서 새로 받은 값으로 항상 덮어쓴다(freshest-wins 이미 적용됨)."""
+    """예측 upsert — jeju_model 에서 새로 받은 값으로 항상 덮어쓴다(freshest-wins 이미 적용됨)."""
     if df.empty:
         return
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
     con = sqlite3.connect(db_path)
+    collist = ", ".join(FCST_COLS)
+    placeholders = ", ".join(["?"] * len(FCST_COLS))
+    overwrite_set = ", ".join(f"{c} = excluded.{c}" for c in FCST_COLS)
     for row in df.itertuples(index=False):
-        con.execute("""
-            INSERT INTO forecast_data (timestamp, est_demand, horizon_d, base, updated_at)
-            VALUES (?, ?, ?, ?, ?)
+        row_d = row._asdict()
+        con.execute(f"""
+            INSERT INTO forecast_data (timestamp, {collist}, horizon_d, base, updated_at)
+            VALUES (?, {placeholders}, ?, ?, ?)
             ON CONFLICT(timestamp) DO UPDATE SET
-                est_demand = excluded.est_demand,
+                {overwrite_set},
                 horizon_d = excluded.horizon_d,
                 base = excluded.base,
                 updated_at = excluded.updated_at
-        """, (row.timestamp, row.est_demand, row.horizon_d, row.base, now))
+        """, (row_d["timestamp"], *[row_d.get(c) for c in FCST_COLS], row_d["horizon_d"], row_d["base"], now))
     con.commit()
     con.close()
 
 
 def load_range(start, end, db_path=DB_PATH):
-    """[start, end] 구간의 실측+예측 수요를 timestamp 기준으로 합쳐 반환한다."""
-    import pandas as pd
+    """[start, end] 구간의 실측+예측을 timestamp 기준으로 합쳐 반환한다.
+
+    jeju_model pages/common.py 의 jeju_range_compare 와 같은 방식으로 신재생 합계·순부하는
+    저장하지 않고 조회 시점에 구성한다: est_renew_gen 은 이미 sync_forecast.py 가 담아 오지만
+    real_renew_gen 은 KPX 원본값을 그대로 쓰고, real_net_load 는 real_demand - real_renew_gen 으로 계산한다.
+    """
     con = sqlite3.connect(db_path)
     hist = pd.read_sql_query(
-        "SELECT timestamp, real_demand FROM historical_data WHERE timestamp BETWEEN ? AND ?",
+        f"SELECT timestamp, {', '.join(HIST_COLS)} FROM historical_data WHERE timestamp BETWEEN ? AND ?",
         con, params=(start, end))
     fcst = pd.read_sql_query(
-        "SELECT timestamp, est_demand FROM forecast_data WHERE timestamp BETWEEN ? AND ?",
+        f"SELECT timestamp, {', '.join(FCST_COLS)} FROM forecast_data WHERE timestamp BETWEEN ? AND ?",
         con, params=(start, end))
     con.close()
     base = pd.DataFrame({"timestamp": pd.date_range(start, end, freq="h").strftime('%Y-%m-%d %H:%M:%S')})
     df = base.merge(hist, on="timestamp", how="left").merge(fcst, on="timestamp", how="left")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
+    df["real_net_load"] = df["real_demand"] - df["real_renew_gen"]
     return df
