@@ -5,6 +5,15 @@ from datetime import datetime
 DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "database", "jeju_energy.db")
 
 
+def _ensure_columns(con, table, columns):
+    """구버전 스키마(더 적은 컬럼)로 이미 테이블이 있던 경우를 위한 안전장치 —
+    필요한 컬럼이 없으면 ALTER TABLE 로 추가한다(기존 값은 건드리지 않음)."""
+    existing = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+    for name, coltype in columns:
+        if name not in existing:
+            con.execute(f'ALTER TABLE {table} ADD COLUMN "{name}" {coltype}')
+
+
 def init_db(db_path=DB_PATH):
     """historical_data(실측)·forecast_data(jeju_model 동기화) 테이블을 준비한다."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
@@ -25,6 +34,9 @@ def init_db(db_path=DB_PATH):
             updated_at TEXT
         )
     """)
+    _ensure_columns(con, "historical_data", [("real_demand", "REAL"), ("updated_at", "TEXT")])
+    _ensure_columns(con, "forecast_data",
+                    [("est_demand", "REAL"), ("horizon_d", "INTEGER"), ("base", "TEXT"), ("updated_at", "TEXT")])
     con.commit()
     con.close()
 
