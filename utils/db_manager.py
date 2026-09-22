@@ -100,7 +100,7 @@ def load_range(start, end, db_path=DB_PATH):
         f"SELECT timestamp, {', '.join(HIST_COLS)} FROM historical_data WHERE timestamp BETWEEN ? AND ?",
         con, params=(start, end))
     fcst = pd.read_sql_query(
-        f"SELECT timestamp, {', '.join(FCST_COLS)} FROM forecast_data WHERE timestamp BETWEEN ? AND ?",
+        f"SELECT timestamp, base, {', '.join(FCST_COLS)} FROM forecast_data WHERE timestamp BETWEEN ? AND ?",
         con, params=(start, end))
     con.close()
     base = pd.DataFrame({"timestamp": pd.date_range(start, end, freq="h").strftime('%Y-%m-%d %H:%M:%S')})

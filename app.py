@@ -28,6 +28,19 @@ st.markdown("""
     }
     .block-container { padding-top: 3.0rem !important; }
     div[data-testid="stDateInput"] input { text-align: center; }
+
+    /* 1920x1080 전체화면·반반모드(약 960px 폭) 둘 다에서 컨트롤 줄이 깨지지 않도록
+       좁아지면 다음 줄로 자연스럽게 넘어가게 한다(고정 폭 대신 최소 폭만 보장). */
+    div[data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+        row-gap: 0.5rem;
+    }
+    div[data-testid="stHorizontalBlock"] > div[data-testid="column"] {
+        min-width: 150px;
+    }
+    @media (max-width: 1100px) {
+        header[data-testid="stHeader"]::before { font-size: 17px; left: 60px; }
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -87,3 +100,16 @@ fig.update_layout(
     margin=dict(l=40, r=20, t=40, b=40),
 )
 st.plotly_chart(fig, width="stretch")
+
+# 현재 화면에 표시 중인 예측이 언제 생성(발표)된 것인지 표시.
+# 여러 날을 함께 보면 지평(horizon_d)별로 발표 시각이 다를 수 있어 최소~최대로 보여준다.
+forecast_bases = pd.to_datetime(df["base"].dropna().unique())
+if len(forecast_bases) == 0:
+    st.caption("예측 생성 시각: 정보 없음")
+elif len(forecast_bases) == 1:
+    st.caption(f"예측 생성 시각: {forecast_bases[0]:%Y-%m-%d %H:%M} 발표")
+else:
+    st.caption(
+        f"예측 생성 시각: {forecast_bases.min():%Y-%m-%d %H:%M} ~ "
+        f"{forecast_bases.max():%Y-%m-%d %H:%M} 발표 (지평별로 발표 시각이 다름)"
+    )
