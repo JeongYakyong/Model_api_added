@@ -8,7 +8,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.db_manager import init_db, load_range
 from utils import chart_warn
 
-st.set_page_config(page_title="제주 전력수요 예측", layout="wide")
+st.set_page_config(page_title="제주통제소 예측 대시보드", layout="wide")
 init_db()
 
 st.markdown("""
@@ -17,7 +17,7 @@ st.markdown("""
         background-color: #e0f8e0 !important;
     }
     header[data-testid="stHeader"]::before {
-        content: "제주 전력수요 예측";
+        content: "제주통제소 예측 대시보드";
         position: absolute;
         left: 80px;
         top: 15px;
@@ -68,7 +68,7 @@ col_prev.button("◀ 이전", on_click=_shift, args=(-1,), width="stretch")
 col_date.date_input("날짜", key=DAY_KEY, label_visibility="collapsed")
 col_next.button("다음 ▶", on_click=_shift, args=(1,), width="stretch")
 k = col_slider.slider("표시 기간(일)", 1, 5, 1, help="선택일부터 며칠치를 표시할지")
-with col_series.popover("데이터 선택", width="stretch"):
+with col_series.popover("표시", width="stretch"):
     chosen = {label: st.checkbox(label, value=default, key=f"series_{col}")
               for label, col, _, default in SERIES}
 with col_warn.popover("경고", help="위험구간 음영 임계값 설정", width="stretch"):
