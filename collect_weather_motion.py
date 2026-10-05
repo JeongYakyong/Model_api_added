@@ -32,7 +32,7 @@ RETENTION_HOURS = 48
 
 GIBS_WMS_URL = "https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi"
 GIBS_LAYER = "Himawari_AHI_Band13_Clean_Infrared"
-IMAGE_WIDTH, IMAGE_HEIGHT = 720, 700
+IMAGE_WIDTH, IMAGE_HEIGHT = 640, 790   # 표시 영역의 Web Mercator 가로세로 비율에 맞춤
 
 # 적외선 밝기(0~255) → 구름 투명도. 지표·바다(따뜻함)는 어둡게(약 80~100) 찍히므로 투명하게 지우고,
 # 차가운 구름 꼭대기일수록 밝아지므로 진하게 남긴다.

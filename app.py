@@ -4,11 +4,14 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 import streamlit.components.v1 as components
+from dotenv import load_dotenv
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.db_manager import init_db, load_range
 from utils import chart_warn
 from utils import weather_motion
+
+load_dotenv()   # CARTO_API_KEY (구름·바람 탭 배경 지도)
 
 st.set_page_config(page_title="제주통제소 예측 대시보드", layout="wide")
 init_db()
@@ -128,6 +131,6 @@ if weather_tab.open:
         if map_html is None:
             st.info("구름·바람 자료가 아직 없습니다. 3시간마다 자동으로 받아옵니다.")
         else:
-            components.html(map_html, height=700)
+            components.html(map_html, height=780)
         st.caption("구름: 히마와리 위성 적외선 영상(약 1시간 지연, 최근 6시간 반복 재생) · "
                    "바람: 10m 바람 예보(0.5도 격자) · 3시간마다 갱신")

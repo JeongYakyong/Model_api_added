@@ -11,13 +11,21 @@ import json
 import math
 import os
 from datetime import datetime, timedelta, timezone
+from urllib.parse import quote
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WEATHER_DIR = os.path.join(PROJECT_DIR, "database", "weather_motion")
 
-# 표시 영역: 제주로 다가오는 구름이 보이도록 서해·남해·동중국해까지 넓게 잡는다.
-SOUTH_LAT, NORTH_LAT = 30.0, 37.0
-WEST_LON, EAST_LON = 122.0, 131.0
+# 표시 영역: 남한 전체(수도권~제주) + 서해·남해 약간. 중국·일본 쪽은 필요 없어 잘라낸다.
+SOUTH_LAT, NORTH_LAT = 32.0, 39.0
+WEST_LON, EAST_LON = 124.0, 131.0
+
+# 위치 감을 잡기 위한 주요 도시 이름(배경 지도는 지명·경계 없는 깔끔한 것을 쓰므로 직접 찍는다)
+CITY_LABELS = [
+    ("서울", 37.57, 126.98), ("강릉", 37.75, 128.88), ("대전", 36.35, 127.38),
+    ("대구", 35.87, 128.60), ("광주", 35.16, 126.85), ("부산", 35.18, 129.08),
+    ("제주", 33.50, 126.53),
+]
 
 # 화면에 재생할 구름 프레임 범위(최근 몇 시간, 몇 분 간격)
 ANIMATION_HOURS = 6
@@ -35,6 +43,16 @@ def mercator_bbox():
     west_x, south_y = to_mercator(WEST_LON, SOUTH_LAT)
     east_x, north_y = to_mercator(EAST_LON, NORTH_LAT)
     return west_x, south_y, east_x, north_y
+
+
+def _carto_key_query():
+    """CARTO 타일 URL 뒤에 붙일 키 쿼리스트링(키가 없으면 빈 문자열 — 지도에 워터마크가 찍힌다).
+
+    ★ 호출 시점에 os.getenv 한다 — 모듈 최상단에서 읽으면 load_dotenv() 순서에 따라 빈 값이
+    굳어버린다(jeju_model weather_map_jeju._carto_tile_qs 와 같은 관례).
+    """
+    key = os.getenv("CARTO_API_KEY", "").strip()
+    return f"?key={quote(key, safe='')}" if key else ""
 
 
 def cloud_frame_path(observed_at_utc):
@@ -68,7 +86,7 @@ def list_wind_grids():
     return sorted(grids)
 
 
-def build_map_html(height=640):
+def build_map_html(height=720):
     """최근 ANIMATION_HOURS 시간치 구름 프레임 + 현재 시각에 가장 가까운 바람 격자로 지도 HTML 생성.
 
     데이터가 하나도 없으면 None.
@@ -108,6 +126,8 @@ def build_map_html(height=640):
         "__WIND__": wind_json,
         "__WIND_LABEL__": wind_label,
         "__BOUNDS__": json.dumps([[SOUTH_LAT, WEST_LON], [NORTH_LAT, EAST_LON]]),
+        "__CITIES__": json.dumps(CITY_LABELS, ensure_ascii=False),
+        "__TILE_KEY_QUERY__": _carto_key_query(),
     }
     for placeholder, value in replacements.items():
         html = html.replace(placeholder, value)
@@ -126,8 +146,10 @@ MAP_TEMPLATE = """
   #controls button { padding: 4px 12px; cursor: pointer; }
   #frame_slider { flex: 1; }
   #frame_label { min-width: 120px; font-weight: 600; }
-  .dark_base_map { filter: invert(1) hue-rotate(180deg) grayscale(0.7) brightness(0.75); }
   #map { background: #1b1b1b; }
+  .city_label { background: none; border: none; box-shadow: none; padding: 0;
+                color: #e0e0e0; font-size: 13px; font-weight: 600; text-shadow: 0 0 3px #000; }
+  .city_label::before { display: none; }
 </style>
 <div id="controls">
   <button id="play_button">⏸ 정지</button>
@@ -142,12 +164,13 @@ MAP_TEMPLATE = """
   const windData = __WIND__;
   const bounds = __BOUNDS__;
 
-  // 제주가 가운데 오도록 — 위성·바람 영역(서해~남해)이 화면을 대부분 채우는 배율
-  const map = L.map("map", { minZoom: 5, maxZoom: 10 }).setView([33.5, 126.5], 7);
-  // OSM 지도를 CSS 로 어둡게 뒤집어 쓴다 — 흰 구름과 밝은 바람 입자가 잘 보이도록(윈디와 비슷한 느낌)
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    attribution: "&copy; OpenStreetMap | 구름: NASA GIBS (Himawari AHI) | 바람: Open-Meteo (CC BY 4.0)",
-    className: "dark_base_map",
+  // 남한 전체(수도권~제주)가 한 화면에 들어오는 위치·배율
+  const map = L.map("map", { minZoom: 6, maxZoom: 10, maxBounds: [[29, 119], [42, 136]] })
+    .setView([35.6, 127.7], 7);
+  // 지명·행정경계 없는 어두운 지도 — 흰 구름과 밝은 바람 입자가 잘 보이도록
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png__TILE_KEY_QUERY__", {
+    attribution: "&copy; OpenStreetMap &copy; CARTO | 구름: NASA GIBS (Himawari AHI) | 바람: Open-Meteo (CC BY 4.0)",
+    subdomains: "abcd",
   }).addTo(map);
 
   // 구름: 프레임마다 imageOverlay 를 미리 만들어 두고 투명도만 바꿔 깜빡임 없이 넘긴다.
@@ -181,6 +204,14 @@ MAP_TEMPLATE = """
   if (!playing) playButton.textContent = "▶ 재생";
   slider.oninput = () => { playing = false; playButton.textContent = "▶ 재생"; showFrame(+slider.value); };
   showClouds.onchange = () => showFrame(currentFrame);
+
+  // 도시 이름은 구름·바람 위에 보이도록 별도 pane 에 올린다
+  map.createPane("city_pane").style.zIndex = 650;
+  __CITIES__.forEach(([name, lat, lon]) => {
+    L.circleMarker([lat, lon], { pane: "city_pane", radius: 3, color: "#e0e0e0", weight: 1, fillOpacity: 1 })
+      .bindTooltip(name, { permanent: true, direction: "right", className: "city_label", pane: "city_pane" })
+      .addTo(map);
+  });
 
   // 바람: 성긴 격자를 입자로 흘려 보낸다(빠르기·방향만 감 잡는 용도).
   let windLayer = null;
