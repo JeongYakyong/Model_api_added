@@ -128,16 +128,28 @@ with forecast_tab:
 
 if weather_tab.open:
     with weather_tab:
+        # 화면이 절반(1920 기준 약 960px)으로 좁아지면 차트·표 칸은 숨기고 지도만 전체 폭으로.
+        # 칸에 key 를 붙여(st-key-...) 그 칸을 감싼 stColumn 을 CSS 로 찾는다.
+        st.markdown("""
+        <style>
+            @media (max-width: 1100px) {
+                div[data-testid="stColumn"]:has(.st-key-weather_trend) { display: none !important; }
+                div[data-testid="stColumn"]:has(.st-key-weather_map) {
+                    flex: 1 1 100% !important; width: 100% !important; max-width: 100% !important;
+                }
+            }
+        </style>
+        """, unsafe_allow_html=True)
         col_map, col_trend = st.columns([1, 1], gap="medium")
 
-        with col_map:
+        with col_map, st.container(key="weather_map"):
             map_html = weather_motion.build_map_html()
             if map_html is None:
                 st.info("구름·바람 자료가 아직 없습니다. 3시간마다 자동으로 받아옵니다.")
             else:
                 components.html(map_html, height=780)
 
-        with col_trend:
+        with col_trend, st.container(key="weather_trend"):
             # 최근 24시간 실측 + 앞으로 24시간 예측 — 지도(구름·바람)와 발전량을 나란히 보기 위함
             now_hour = pd.Timestamp.now().floor("h")
             trend_start = now_hour - pd.Timedelta(hours=24)
