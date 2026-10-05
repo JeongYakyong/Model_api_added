@@ -86,6 +86,16 @@ def list_wind_grids():
     return sorted(grids)
 
 
+def animation_time_range_kst():
+    """지도에서 재생 중인 구름 프레임의 처음·마지막 시각(KST, 시간대 정보 없음) — 차트 음영용. 없으면 None."""
+    cloud_frames = list_cloud_frames()
+    if not cloud_frames:
+        return None
+    newest = cloud_frames[-1][0]
+    oldest = min(t for t, _ in cloud_frames if t > newest - timedelta(hours=ANIMATION_HOURS))
+    return (oldest.astimezone(KST).replace(tzinfo=None), newest.astimezone(KST).replace(tzinfo=None))
+
+
 def build_map_html(height=720):
     """최근 ANIMATION_HOURS 시간치 구름 프레임 + 현재 시각에 가장 가까운 바람 격자로 지도 HTML 생성.
 
@@ -166,9 +176,9 @@ MAP_TEMPLATE = """
   const windData = __WIND__;
   const bounds = __BOUNDS__;
 
-  // 남한 전체(수도권~제주)가 한 화면에 들어오는 위치·배율
+  // 남한 전체(수도권~제주)가 화면 절반 폭 지도에 꽉 차는 위치·배율
   const map = L.map("map", { minZoom: 6, maxZoom: 10, maxBounds: [[29, 119], [42, 136]] })
-    .setView([35.6, 127.7], 7);
+    .setView([35.7, 127.6], 7);
   // 지명·행정경계 없는 밝은 지도
   L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png__TILE_KEY_QUERY__", {
     attribution: "&copy; OpenStreetMap &copy; CARTO | 구름: NASA GIBS (Himawari AHI) | 바람: Open-Meteo (CC BY 4.0)",

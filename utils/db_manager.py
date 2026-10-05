@@ -7,6 +7,11 @@ DB_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 
 HIST_COLS = ["real_demand", "real_renew_gen", "real_solar_gen", "real_wind_gen"]
 FCST_COLS = ["est_demand", "est_renew_gen", "est_solar_gen", "est_wind_gen", "est_net_load"]
+# 구름·바람 탭의 기상 예보 표 — jeju_model 이 예측에 쓴 입력과 같은 출처(sync_forecast.py 가 복사).
+# 지점은 jeju_model 관례대로 서부(고산)·동부(성산)·남부(서귀포) 격자점.
+WEATHER_ZONES = ["west", "east", "south"]
+WEATHER_COLS = [f"{quantity}_{zone}" for zone in WEATHER_ZONES
+                for quantity in ("radiation", "rainfall", "total_cloud")]
 
 
 def _ensure_columns(con, table, columns):
@@ -19,7 +24,7 @@ def _ensure_columns(con, table, columns):
 
 
 def init_db(db_path=DB_PATH):
-    """historical_data(실측)·forecast_data(jeju_model 동기화) 테이블을 준비한다."""
+    """historical_data(실측)·forecast_data·weather_forecast(jeju_model 동기화) 테이블을 준비한다."""
     os.makedirs(os.path.dirname(db_path), exist_ok=True)
     con = sqlite3.connect(db_path)
     con.execute("""
@@ -36,6 +41,13 @@ def init_db(db_path=DB_PATH):
             updated_at TEXT
         )
     """)
+    con.execute("""
+        CREATE TABLE IF NOT EXISTS weather_forecast (
+            timestamp TEXT PRIMARY KEY,
+            updated_at TEXT
+        )
+    """)
+    _ensure_columns(con, "weather_forecast", [(c, "REAL") for c in WEATHER_COLS] + [("updated_at", "TEXT")])
     _ensure_columns(con, "historical_data", [(c, "REAL") for c in HIST_COLS] + [("updated_at", "TEXT")])
     _ensure_columns(con, "forecast_data",
                     [(c, "REAL") for c in FCST_COLS] + [("horizon_d", "INTEGER"), ("base", "TEXT"), ("updated_at", "TEXT")])
@@ -107,4 +119,38 @@ def load_range(start, end, db_path=DB_PATH):
     df = base.merge(hist, on="timestamp", how="left").merge(fcst, on="timestamp", how="left")
     df["timestamp"] = pd.to_datetime(df["timestamp"])
     df["real_net_load"] = df["real_demand"] - df["real_renew_gen"]
+    return df
+
+
+def save_weather_forecast(df, db_path=DB_PATH):
+    """기상 예보 upsert — save_forecast 와 같이 새로 받은 값으로 항상 덮어쓴다."""
+    if df.empty:
+        return
+    now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    con = sqlite3.connect(db_path)
+    collist = ", ".join(WEATHER_COLS)
+    placeholders = ", ".join(["?"] * len(WEATHER_COLS))
+    overwrite_set = ", ".join(f"{c} = excluded.{c}" for c in WEATHER_COLS)
+    for row in df.to_dict("records"):
+        con.execute(f"""
+            INSERT INTO weather_forecast (timestamp, {collist}, updated_at)
+            VALUES (?, {placeholders}, ?)
+            ON CONFLICT(timestamp) DO UPDATE SET
+                {overwrite_set},
+                updated_at = excluded.updated_at
+        """, (row["timestamp"], *[row.get(c) for c in WEATHER_COLS], now))
+    con.commit()
+    con.close()
+
+
+def load_weather_range(start, end, db_path=DB_PATH):
+    """[start, end] 구간의 기상 예보(시각별 한 행, 빈 시각은 NaN)."""
+    con = sqlite3.connect(db_path)
+    weather = pd.read_sql_query(
+        f"SELECT timestamp, {', '.join(WEATHER_COLS)} FROM weather_forecast WHERE timestamp BETWEEN ? AND ?",
+        con, params=(start, end))
+    con.close()
+    base = pd.DataFrame({"timestamp": pd.date_range(start, end, freq="h").strftime('%Y-%m-%d %H:%M:%S')})
+    df = base.merge(weather, on="timestamp", how="left")
+    df["timestamp"] = pd.to_datetime(df["timestamp"])
     return df
