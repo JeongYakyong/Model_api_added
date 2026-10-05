@@ -146,9 +146,11 @@ MAP_TEMPLATE = """
   #controls button { padding: 4px 12px; cursor: pointer; }
   #frame_slider { flex: 1; }
   #frame_label { min-width: 120px; font-weight: 600; }
-  #map { background: #1b1b1b; }
+  #map { background: #e8eef2; }
+  /* 밝은 바탕에서 흰 구름이 묻히지 않도록 회색으로 */
+  .cloud_frame { filter: brightness(0.62); }
   .city_label { background: none; border: none; box-shadow: none; padding: 0;
-                color: #e0e0e0; font-size: 13px; font-weight: 600; text-shadow: 0 0 3px #000; }
+                color: #263238; font-size: 13px; font-weight: 700; text-shadow: 0 0 3px #fff, 0 0 3px #fff; }
   .city_label::before { display: none; }
 </style>
 <div id="controls">
@@ -167,15 +169,15 @@ MAP_TEMPLATE = """
   // 남한 전체(수도권~제주)가 한 화면에 들어오는 위치·배율
   const map = L.map("map", { minZoom: 6, maxZoom: 10, maxBounds: [[29, 119], [42, 136]] })
     .setView([35.6, 127.7], 7);
-  // 지명·행정경계 없는 어두운 지도 — 흰 구름과 밝은 바람 입자가 잘 보이도록
-  L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png__TILE_KEY_QUERY__", {
+  // 지명·행정경계 없는 밝은 지도
+  L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png__TILE_KEY_QUERY__", {
     attribution: "&copy; OpenStreetMap &copy; CARTO | 구름: NASA GIBS (Himawari AHI) | 바람: Open-Meteo (CC BY 4.0)",
     subdomains: "abcd",
   }).addTo(map);
 
   // 구름: 프레임마다 imageOverlay 를 미리 만들어 두고 투명도만 바꿔 깜빡임 없이 넘긴다.
   const cloudLayers = frames.map(frame =>
-    L.imageOverlay(frame.src, bounds, { opacity: 0, interactive: false }).addTo(map));
+    L.imageOverlay(frame.src, bounds, { opacity: 0, interactive: false, className: "cloud_frame" }).addTo(map));
   const slider = document.getElementById("frame_slider");
   const frameLabel = document.getElementById("frame_label");
   const playButton = document.getElementById("play_button");
@@ -208,7 +210,7 @@ MAP_TEMPLATE = """
   // 도시 이름은 구름·바람 위에 보이도록 별도 pane 에 올린다
   map.createPane("city_pane").style.zIndex = 650;
   __CITIES__.forEach(([name, lat, lon]) => {
-    L.circleMarker([lat, lon], { pane: "city_pane", radius: 3, color: "#e0e0e0", weight: 1, fillOpacity: 1 })
+    L.circleMarker([lat, lon], { pane: "city_pane", radius: 3, color: "#263238", weight: 1, fillOpacity: 1 })
       .bindTooltip(name, { permanent: true, direction: "right", className: "city_label", pane: "city_pane" })
       .addTo(map);
   });
@@ -232,8 +234,8 @@ MAP_TEMPLATE = """
       velocityScale: 0.008,
       particleMultiplier: 1 / 1500,
       lineWidth: 1.2,
-      // 흰 구름과 겹치지 않게 하늘색 계열 → 강해질수록(15m/s 이상) 노랑·주황
-      colorScale: ["#4fc3f7", "#81d4fa", "#ffe082", "#ffb300", "#ff7043"],
+      // 밝은 바탕·흰 구름 위에서도 보이게 진한 색 — 약하면 파랑, 강해질수록(15m/s 이상) 주황·빨강
+      colorScale: ["#1565c0", "#1e88e5", "#f9a825", "#ef6c00", "#c62828"],
     }).addTo(map);
   }
   document.getElementById("show_wind").onchange = event => {
