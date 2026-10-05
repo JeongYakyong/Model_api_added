@@ -136,8 +136,6 @@ if weather_tab.open:
                 st.info("구름·바람 자료가 아직 없습니다. 3시간마다 자동으로 받아옵니다.")
             else:
                 components.html(map_html, height=780)
-            st.caption("지난 6시간은 히마와리 위성 관측(약 1시간 지연), 이어서 앞으로 24시간은 "
-                       "JMA 예보(구름·바람) · 위성 3시간마다, 예보 하루 2번(01·13시) 갱신")
 
         with col_trend:
             # 최근 24시간 실측 + 앞으로 24시간 예측 — 지도(구름·바람)와 발전량을 나란히 보기 위함
@@ -162,9 +160,8 @@ if weather_tab.open:
             trend_fig.update_layout(height=400, hovermode="x unified", showlegend=False,
                                     margin=dict(l=40, r=10, t=30, b=20))
             st.plotly_chart(trend_fig, width="stretch")
-            st.caption("실선 = 실측, 점선 = 예측 · 빨간 점선 = 현재")
 
-            # 시간별 기상 예보 표 — 예측에 실제로 들어간 입력(일사·강수 KIMG, 운량 JMA)
+            # 시간별 기상 예보 표 — 예측에 실제로 들어간 입력(일사·강수 기상청 KIMG, 운량 JMA)
             zone_labels = {"서부(고산)": "west", "동부(성산)": "east", "남부(서귀포)": "south"}
             zone_label = st.segmented_control("지점", list(zone_labels), default="서부(고산)",
                                               key="weather_zone", label_visibility="collapsed")
@@ -179,4 +176,4 @@ if weather_tab.open:
                 "운량(%)": (weather[f"total_cloud_{zone}"] * 100).round(0),
             })
             st.dataframe(weather_table, hide_index=True, height=300, width="stretch")
-            st.caption("기상 예보(1시간) · 일사량·강수량: KIMG, 운량: JMA — 예측 모델 입력과 같은 출처")
+            st.caption("출처: 일사량·강수량 기상청, 운량 JMA")
