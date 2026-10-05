@@ -1,15 +1,17 @@
-"""collect_weather_motion.py — 구름·바람 움직임 탭 자료 수집 cron 진입점 (3시간마다).
+"""collect_weather_motion.py — 구름·바람 움직임 탭 자료 수집 cron 진입점.
 
-    python collect_weather_motion.py
+    python collect_weather_motion.py              # 위성 관측만 (cron 3시간마다)
+    python collect_weather_motion.py --forecast   # 예보까지 (cron 하루 2번, 01:00·13:00 KST)
 
 1) 구름: NASA GIBS 히마와리 적외선(Band13) 영상을 30분 간격으로 받아, 구름만 남기고 나머지는
    투명하게 바꾼 webp 프레임으로 저장한다(이미 받은 시각은 건너뜀). GIBS 는 약 1시간 늦게 올라온다.
 2) 예보: Open-Meteo 의 JMA MSM 모델(일본 기상청 5km)에서 0.25도 격자로 운량·10m 바람을 받는다.
-   - 운량 → 앞으로 FORECAST_HOURS 시간의 시각별 구름 예보 프레임(webp). 위성 프레임 뒤에 이어 재생된다.
+   - 운량 → 앞으로 FORECAST_FETCH_HOURS 시간의 시각별 구름 예보 프레임(webp). 위성 프레임 뒤에 이어 재생된다.
    - 바람 → 지난 몇 시간 + 앞으로의 시각별 JSON(0.5도로 솎아서). 화면 시각에 맞춰 입자가 바뀐다.
    새로 받을 때마다 최신 예보로 덮어쓴다. JMA 를 쓰는 이유: jeju_model 태양광 모델 운량 입력과 같은 출처.
-   ★ Open-Meteo 는 지점 하나를 호출 1회로 센다(841점 = 841회, 무료 하루 1만 회). 그래서 cron 은
-   3시간마다 돌아도 예보는 FORECAST_REFRESH_HOURS(6시간)이 지났을 때만 받는다 → 하루 약 3,400회.
+   ★ Open-Meteo 는 지점 하나를 호출 1회로 센다(841점 = 841회, 무료 하루 1만 회). 그래서 예보는
+   하루 2번만 받는다 → 하루 약 1,700회. JMA MSM 은 00·12 UTC 실행만 78시간까지 길게 내고,
+   Open-Meteo 게시까지 약 3시간 반이 걸리므로 01:00·13:00 KST 에 받으면 각각 그 실행을 받는다.
 3) 보관: RETENTION_HOURS 보다 오래된 파일은 지운다 — 디스크가 계속 늘지 않도록.
 """
 import sys
@@ -26,7 +28,7 @@ from PIL import Image
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.weather_motion import (
     WEATHER_DIR, SOUTH_LAT, NORTH_LAT, WEST_LON, EAST_LON,
-    ANIMATION_HOURS, FRAME_INTERVAL_MINUTES, FORECAST_HOURS,
+    ANIMATION_HOURS, FRAME_INTERVAL_MINUTES,
     mercator_bbox, cloud_frame_path, forecast_cloud_frame_path, wind_grid_path,
     list_cloud_frames, list_forecast_cloud_frames, list_wind_grids,
 )
@@ -35,7 +37,8 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(mess
 logger = logging.getLogger('collect_weather_motion')
 
 RETENTION_HOURS = 48
-FORECAST_REFRESH_HOURS = 6   # 예보를 새로 받는 간격(위성 관측은 호출 제한이 없어 cron 마다 받음)
+# 예보 1회 수신분의 길이 — 다음 수신(12시간 뒤)이 한 번 실패해도 앞으로 24시간이 비지 않도록 넉넉히
+FORECAST_FETCH_HOURS = 48
 
 GIBS_WMS_URL = "https://gibs.earthdata.nasa.gov/wms/epsg3857/best/wms.cgi"
 GIBS_LAYER = "Himawari_AHI_Band13_Clean_Infrared"
@@ -163,22 +166,7 @@ def _wind_records(speeds, directions, latitudes, longitudes, valid_at):
     ]
 
 
-def _hours_since_last_forecast():
-    """마지막으로 예보를 받은 뒤 지난 시간 — 예보 프레임 파일의 수정 시각 기준. 받은 적 없으면 None."""
-    forecast_frames = list_forecast_cloud_frames()
-    if not forecast_frames:
-        return None
-    last_saved = max(os.path.getmtime(path) for _, path in forecast_frames)
-    return (datetime.now().timestamp() - last_saved) / 3600
-
-
 def collect_forecast_grids():
-    hours_since = _hours_since_last_forecast()
-    # cron 이 몇 분씩 밀려도 건너뛰지 않도록 30분 여유를 둔다
-    if hours_since is not None and hours_since < FORECAST_REFRESH_HOURS - 0.5:
-        logger.info(f"예보는 {hours_since:.1f}시간 전에 받음 — {FORECAST_REFRESH_HOURS}시간마다 받으므로 건너뜀")
-        return
-
     latitudes, longitudes = _forecast_grid_axes()
     # Open-Meteo 다지점 요청: 위도·경도 목록을 같은 순서로 나란히 보낸다(북→남, 서→동).
     # 841점이라 주소가 길어져 POST 로 보낸다.
@@ -190,8 +178,7 @@ def collect_forecast_grids():
         "wind_speed_unit": "ms",
         "timezone": "GMT",
         "past_hours": ANIMATION_HOURS + 1,      # 위성 프레임 구간의 바람
-        # 다음에 새로 받기 전(최대 6시간)에도 앞으로 24시간이 비지 않도록 그만큼 더 받는다
-        "forecast_hours": FORECAST_HOURS + FORECAST_REFRESH_HOURS + 1,
+        "forecast_hours": FORECAST_FETCH_HOURS + 1,
     }, timeout=120)
     response.raise_for_status()
     points = response.json()
@@ -228,8 +215,11 @@ def delete_old_files():
 
 def main():
     os.makedirs(WEATHER_DIR, exist_ok=True)
+    steps = [collect_cloud_frames]
+    if "--forecast" in sys.argv:
+        steps.append(collect_forecast_grids)
     failed = False
-    for step in (collect_cloud_frames, collect_forecast_grids):
+    for step in steps:
         try:
             step()
         except Exception:

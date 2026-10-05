@@ -137,7 +137,7 @@ if weather_tab.open:
             else:
                 components.html(map_html, height=780)
             st.caption("지난 6시간은 히마와리 위성 관측(약 1시간 지연), 이어서 앞으로 24시간은 "
-                       "JMA 예보(구름·바람) · 3시간마다 갱신")
+                       "JMA 예보(구름·바람) · 위성 3시간마다, 예보 하루 2번(01·13시) 갱신")
 
         with col_trend:
             # 최근 24시간 실측 + 앞으로 24시간 예측 — 지도(구름·바람)와 발전량을 나란히 보기 위함
