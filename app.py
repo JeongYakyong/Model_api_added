@@ -3,10 +3,12 @@ import sys
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+import streamlit.components.v1 as components
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from utils.db_manager import init_db, load_range
 from utils import chart_warn
+from utils import weather_motion
 
 st.set_page_config(page_title="제주통제소 예측 대시보드", layout="wide")
 init_db()
@@ -62,54 +64,70 @@ def _shift(delta):
     st.session_state[DAY_KEY] = st.session_state[DAY_KEY] + pd.Timedelta(days=delta)
 
 
-col_prev, col_date, col_next, col_slider, col_series, col_warn = st.columns(
-    [0.8, 1.6, 0.8, 2.2, 0.8, 0.8], vertical_alignment="center")
-col_prev.button("◀ 이전", on_click=_shift, args=(-1,), width="stretch")
-col_date.date_input("날짜", key=DAY_KEY, label_visibility="collapsed")
-col_next.button("다음 ▶", on_click=_shift, args=(1,), width="stretch")
-k = col_slider.slider("표시 기간(일)", 1, 5, 1, help="선택일부터 며칠치를 표시할지")
-with col_series.popover("표시", width="stretch"):
-    chosen = {label: st.checkbox(label, value=default, key=f"series_{col}")
-              for label, col, _, default in SERIES}
-with col_warn.popover("경고", help="위험구간 음영 임계값 설정", width="stretch"):
-    threshold_values = chart_warn.render_warning_threshold_inputs()
-    if st.button("적용", key="warn_apply", type="primary", width="stretch"):
-        chart_warn.commit_warning_thresholds(threshold_values)
-        st.rerun()
+# 구름·바람 탭은 열려 있을 때만 그린다(on_change="rerun" + .open) — 구름 프레임이 1MB 가까이 돼
+# 예측 탭에서 버튼을 누를 때마다 지도까지 다시 보내지 않도록. 예측 탭은 항상 그려야
+# 탭을 오가도 날짜·표시·경고 선택이 초기화되지 않는다.
+forecast_tab, weather_tab = st.tabs(["예측", "구름·바람"], on_change="rerun")
 
-day = pd.Timestamp(st.session_state[DAY_KEY])
-start = day.strftime("%Y-%m-%d 00:00:00")
-end = (day + pd.Timedelta(days=k - 1)).strftime("%Y-%m-%d 23:00:00")
-df = load_range(start, end)
+with forecast_tab:
+    col_prev, col_date, col_next, col_slider, col_series, col_warn = st.columns(
+        [0.8, 1.6, 0.8, 2.2, 0.8, 0.8], vertical_alignment="center")
+    col_prev.button("◀ 이전", on_click=_shift, args=(-1,), width="stretch")
+    col_date.date_input("날짜", key=DAY_KEY, label_visibility="collapsed")
+    col_next.button("다음 ▶", on_click=_shift, args=(1,), width="stretch")
+    k = col_slider.slider("표시 기간(일)", 1, 5, 1, help="선택일부터 며칠치를 표시할지")
+    with col_series.popover("표시", width="stretch"):
+        chosen = {label: st.checkbox(label, value=default, key=f"series_{col}")
+                  for label, col, _, default in SERIES}
+    with col_warn.popover("경고", help="위험구간 음영 임계값 설정", width="stretch"):
+        threshold_values = chart_warn.render_warning_threshold_inputs()
+        if st.button("적용", key="warn_apply", type="primary", width="stretch"):
+            chart_warn.commit_warning_thresholds(threshold_values)
+            st.rerun()
 
-fig = go.Figure()
-for label, col, color, _ in SERIES:
-    if not chosen[label]:
-        continue
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df[f"real_{col}"], name=f"{label}(실측)",
-                              mode="lines", line=dict(color=color, width=2)))
-    fig.add_trace(go.Scatter(x=df["timestamp"], y=df[f"est_{col}"], name=f"{label}(예측)",
-                              mode="lines", line=dict(color=color, width=2, dash="dash")))
-# 위험구간 음영 — chart_warn 규약: DatetimeIndex 필수
-chart_warn.draw_warning_zones(fig, df.set_index("timestamp"))
+    day = pd.Timestamp(st.session_state[DAY_KEY])
+    start = day.strftime("%Y-%m-%d 00:00:00")
+    end = (day + pd.Timedelta(days=k - 1)).strftime("%Y-%m-%d 23:00:00")
+    df = load_range(start, end)
 
-fig.update_layout(
-    xaxis_title="시각", yaxis_title="MW",
-    height=600, hovermode="x unified",
-    legend=dict(orientation="h", y=-0.15),          # 계열 범례 — 아래쪽
-    margin=dict(l=40, r=20, t=40, b=40),
-)
-st.plotly_chart(fig, width="stretch")
+    fig = go.Figure()
+    for label, col, color, _ in SERIES:
+        if not chosen[label]:
+            continue
+        fig.add_trace(go.Scatter(x=df["timestamp"], y=df[f"real_{col}"], name=f"{label}(실측)",
+                                  mode="lines", line=dict(color=color, width=2)))
+        fig.add_trace(go.Scatter(x=df["timestamp"], y=df[f"est_{col}"], name=f"{label}(예측)",
+                                  mode="lines", line=dict(color=color, width=2, dash="dash")))
+    # 위험구간 음영 — chart_warn 규약: DatetimeIndex 필수
+    chart_warn.draw_warning_zones(fig, df.set_index("timestamp"))
 
-# 현재 화면에 표시 중인 예측이 언제 생성(발표)된 것인지 표시.
-# 여러 날을 함께 보면 지평(horizon_d)별로 발표 시각이 다를 수 있어 최소~최대로 보여준다.
-forecast_bases = pd.to_datetime(df["base"].dropna().unique())
-if len(forecast_bases) == 0:
-    st.caption("예측 생성 시각: 정보 없음")
-elif len(forecast_bases) == 1:
-    st.caption(f"예측 생성 시각: {forecast_bases[0]:%Y-%m-%d %H:%M} 발표")
-else:
-    st.caption(
-        f"예측 생성 시각: {forecast_bases.min():%Y-%m-%d %H:%M} ~ "
-        f"{forecast_bases.max():%Y-%m-%d %H:%M} 발표 (지평별로 발표 시각이 다름)"
+    fig.update_layout(
+        xaxis_title="시각", yaxis_title="MW",
+        height=600, hovermode="x unified",
+        legend=dict(orientation="h", y=-0.15),          # 계열 범례 — 아래쪽
+        margin=dict(l=40, r=20, t=40, b=40),
     )
+    st.plotly_chart(fig, width="stretch")
+
+    # 현재 화면에 표시 중인 예측이 언제 생성(발표)된 것인지 표시.
+    # 여러 날을 함께 보면 지평(horizon_d)별로 발표 시각이 다를 수 있어 최소~최대로 보여준다.
+    forecast_bases = pd.to_datetime(df["base"].dropna().unique())
+    if len(forecast_bases) == 0:
+        st.caption("예측 생성 시각: 정보 없음")
+    elif len(forecast_bases) == 1:
+        st.caption(f"예측 생성 시각: {forecast_bases[0]:%Y-%m-%d %H:%M} 발표")
+    else:
+        st.caption(
+            f"예측 생성 시각: {forecast_bases.min():%Y-%m-%d %H:%M} ~ "
+            f"{forecast_bases.max():%Y-%m-%d %H:%M} 발표 (지평별로 발표 시각이 다름)"
+        )
+
+if weather_tab.open:
+    with weather_tab:
+        map_html = weather_motion.build_map_html()
+        if map_html is None:
+            st.info("구름·바람 자료가 아직 없습니다. 3시간마다 자동으로 받아옵니다.")
+        else:
+            components.html(map_html, height=700)
+        st.caption("구름: 히마와리 위성 적외선 영상(약 1시간 지연, 최근 6시간 반복 재생) · "
+                   "바람: 10m 바람 예보(0.5도 격자) · 3시간마다 갱신")
