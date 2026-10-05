@@ -221,3 +221,5 @@ briefing_storage.json
 
 # Claude Code
 CLAUDE.md
+# 구름·바람 탭 자료 (cron 이 받아 두고 48시간 지나면 지움)
+database/weather_motion/
