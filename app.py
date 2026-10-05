@@ -136,8 +136,8 @@ if weather_tab.open:
                 st.info("구름·바람 자료가 아직 없습니다. 3시간마다 자동으로 받아옵니다.")
             else:
                 components.html(map_html, height=780)
-            st.caption("구름: 히마와리 위성 적외선 영상(약 1시간 지연, 최근 6시간 반복 재생) · "
-                       "바람: 10m 바람 예보(0.5도 격자) · 3시간마다 갱신")
+            st.caption("지난 6시간은 히마와리 위성 관측(약 1시간 지연), 이어서 앞으로 24시간은 "
+                       "JMA 예보(구름·바람) · 3시간마다 갱신")
 
         with col_trend:
             # 최근 24시간 실측 + 앞으로 24시간 예측 — 지도(구름·바람)와 발전량을 나란히 보기 위함
@@ -157,17 +157,12 @@ if weather_tab.open:
                 trend_fig.add_trace(go.Scatter(x=trend["timestamp"], y=trend[f"est_{col}"],
                                                name=f"{label}(예측)", mode="lines",
                                                line=dict(color=color, width=2, dash="dash")), row=row, col=1)
-            # 지도에서 재생 중인 구름 구간을 음영으로 — 같은 시간대임을 보여 준다
-            animation_range = weather_motion.animation_time_range_kst()
-            if animation_range:
-                trend_fig.add_vrect(x0=animation_range[0], x1=animation_range[1],
-                                    fillcolor="#90a4ae", opacity=0.18, line_width=0)
             trend_fig.add_vline(x=pd.Timestamp.now(), line=dict(color="#d03b3b", width=1, dash="dot"))
             trend_fig.update_yaxes(title_text="MW")
             trend_fig.update_layout(height=400, hovermode="x unified", showlegend=False,
                                     margin=dict(l=40, r=10, t=30, b=20))
             st.plotly_chart(trend_fig, width="stretch")
-            st.caption("실선 = 실측, 점선 = 예측 · 회색 음영 = 지도 구름 재생 구간 · 빨간 점선 = 현재")
+            st.caption("실선 = 실측, 점선 = 예측 · 빨간 점선 = 현재")
 
             # 시간별 기상 예보 표 — 예측에 실제로 들어간 입력(일사·강수 KIMG, 운량 JMA)
             zone_labels = {"서부(고산)": "west", "동부(성산)": "east", "남부(서귀포)": "south"}

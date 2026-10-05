@@ -2,9 +2,11 @@
 """구름·바람 움직임 탭 — 위성 구름 프레임과 바람 격자를 지도 애니메이션으로 보여준다.
 
 데이터는 collect_weather_motion.py(cron, 3시간마다)가 WEATHER_DIR 에 미리 받아 둔다.
-  - 구름: NASA GIBS 히마와리 적외선(Band13) 영상 → 구름만 남기고 투명 처리한 webp 프레임
-  - 바람: Open-Meteo 10m 바람 격자 → leaflet-velocity 입력 형식 JSON
-화면은 브라우저(Leaflet)가 그린다 — 서버는 파일만 읽어 HTML 에 넣어 줄 뿐이다.
+  - 구름(관측): NASA GIBS 히마와리 적외선(Band13) 영상 → 구름만 남기고 투명 처리한 webp 프레임
+  - 구름(예보): Open-Meteo JMA MSM 운량 격자 → 같은 모양의 webp 프레임
+  - 바람: Open-Meteo JMA MSM 10m 바람 격자(시각별) → leaflet-velocity 입력 형식 JSON
+지도는 "지난 몇 시간 위성 관측 → 앞으로의 예보"를 슬라이더 하나로 이어서 재생하고, 바람 입자도
+화면 시각에 맞춰 바뀐다. 화면은 브라우저(Leaflet)가 그린다 — 서버는 파일만 읽어 HTML 에 넣어 줄 뿐이다.
 """
 import base64
 import json
@@ -27,9 +29,10 @@ CITY_LABELS = [
     ("제주", 33.50, 126.53),
 ]
 
-# 화면에 재생할 구름 프레임 범위(최근 몇 시간, 몇 분 간격)
+# 화면에 재생할 범위: 위성 관측 최근 몇 시간(몇 분 간격) + 예보 앞으로 몇 시간(1시간 간격)
 ANIMATION_HOURS = 6
 FRAME_INTERVAL_MINUTES = 30
+FORECAST_HOURS = 24
 
 KST = timezone(timedelta(hours=9))
 
@@ -59,6 +62,10 @@ def cloud_frame_path(observed_at_utc):
     return os.path.join(WEATHER_DIR, f"cloud_{observed_at_utc:%Y%m%d%H%M}.webp")
 
 
+def forecast_cloud_frame_path(valid_at_utc):
+    return os.path.join(WEATHER_DIR, f"fcloud_{valid_at_utc:%Y%m%d%H}.webp")
+
+
 def wind_grid_path(valid_at_utc):
     return os.path.join(WEATHER_DIR, f"wind_{valid_at_utc:%Y%m%d%H}.json")
 
@@ -77,6 +84,15 @@ def list_cloud_frames():
     return sorted(frames)
 
 
+def list_forecast_cloud_frames():
+    """저장된 구름 예보 프레임 [(유효시각 UTC, 경로)] — 오래된 것부터."""
+    if not os.path.isdir(WEATHER_DIR):
+        return []
+    frames = [(_time_from_filename(name, "fcloud_", "%Y%m%d%H"), os.path.join(WEATHER_DIR, name))
+              for name in os.listdir(WEATHER_DIR) if name.startswith("fcloud_")]
+    return sorted(frames)
+
+
 def list_wind_grids():
     """저장된 바람 격자 [(유효시각 UTC, 경로)] — 오래된 것부터."""
     if not os.path.isdir(WEATHER_DIR):
@@ -86,55 +102,52 @@ def list_wind_grids():
     return sorted(grids)
 
 
-def animation_time_range_kst():
-    """지도에서 재생 중인 구름 프레임의 처음·마지막 시각(KST, 시간대 정보 없음) — 차트 음영용. 없으면 None."""
-    cloud_frames = list_cloud_frames()
-    if not cloud_frames:
-        return None
-    newest = cloud_frames[-1][0]
-    oldest = min(t for t, _ in cloud_frames if t > newest - timedelta(hours=ANIMATION_HOURS))
-    return (oldest.astimezone(KST).replace(tzinfo=None), newest.astimezone(KST).replace(tzinfo=None))
+def _encode_image(path):
+    with open(path, "rb") as f:
+        return "data:image/webp;base64," + base64.b64encode(f.read()).decode("ascii")
 
 
 def build_map_html(height=720):
-    """최근 ANIMATION_HOURS 시간치 구름 프레임 + 현재 시각에 가장 가까운 바람 격자로 지도 HTML 생성.
+    """위성 관측(최근 ANIMATION_HOURS 시간) → 예보(앞으로 FORECAST_HOURS 시간)를 한 줄로 이은 지도 HTML.
 
     데이터가 하나도 없으면 None.
     """
-    cloud_frames = list_cloud_frames()
-    if cloud_frames:
-        newest = cloud_frames[-1][0]
-        cloud_frames = [(t, p) for t, p in cloud_frames
-                        if t > newest - timedelta(hours=ANIMATION_HOURS)]
-
-    wind_grids = list_wind_grids()
-    wind_json = "null"
-    wind_label = ""
-    if wind_grids:
-        now = datetime.now(timezone.utc)
-        valid_at, path = min(wind_grids, key=lambda item: abs(item[0] - now))
-        with open(path, encoding="utf-8") as f:
-            wind_json = f.read()
-        wind_label = f"{valid_at.astimezone(KST):%m-%d %H:%M} KST"
-
-    if not cloud_frames and not wind_grids:
-        return None
+    observed_frames = list_cloud_frames()
+    newest_observed = observed_frames[-1][0] if observed_frames else datetime.now(timezone.utc)
+    observed_frames = [(t, p) for t, p in observed_frames
+                       if t > newest_observed - timedelta(hours=ANIMATION_HOURS)]
+    # 예보는 위성 관측이 끝난 다음 시각부터 이어 붙인다
+    forecast_limit = datetime.now(timezone.utc) + timedelta(hours=FORECAST_HOURS)
+    forecast_frames = [(t, p) for t, p in list_forecast_cloud_frames()
+                       if newest_observed < t <= forecast_limit]
 
     frame_entries = []
-    for observed_at, path in cloud_frames:
-        with open(path, "rb") as f:
-            encoded = base64.b64encode(f.read()).decode("ascii")
-        frame_entries.append({
-            "label": f"{observed_at.astimezone(KST):%m-%d %H:%M} KST",
-            "src": f"data:image/webp;base64,{encoded}",
-        })
+    for kind, frames in (("관측", observed_frames), ("예보", forecast_frames)):
+        for valid_at, path in frames:
+            nearest_hour = (valid_at + timedelta(minutes=30)).replace(minute=0)
+            frame_entries.append({
+                "label": f"{kind} {valid_at.astimezone(KST):%m-%d %H:%M}",
+                "is_forecast": kind == "예보",
+                "src": _encode_image(path),
+                "wind": f"{nearest_hour:%Y%m%d%H}",
+            })
+    if not frame_entries:
+        return None
+
+    # 프레임들이 가리키는 시각의 바람 격자만 싣는다
+    wanted_wind_keys = {entry["wind"] for entry in frame_entries}
+    wind_grids = {}
+    for valid_at, path in list_wind_grids():
+        wind_key = f"{valid_at:%Y%m%d%H}"
+        if wind_key in wanted_wind_keys:
+            with open(path, encoding="utf-8") as f:
+                wind_grids[wind_key] = json.load(f)
 
     html = MAP_TEMPLATE
     replacements = {
         "__HEIGHT__": str(height),
-        "__FRAMES__": json.dumps(frame_entries),
-        "__WIND__": wind_json,
-        "__WIND_LABEL__": wind_label,
+        "__FRAMES__": json.dumps(frame_entries, ensure_ascii=False),
+        "__WIND_GRIDS__": json.dumps(wind_grids),
         "__BOUNDS__": json.dumps([[SOUTH_LAT, WEST_LON], [NORTH_LAT, EAST_LON]]),
         "__CITIES__": json.dumps(CITY_LABELS, ensure_ascii=False),
         "__TILE_KEY_QUERY__": _carto_key_query(),
@@ -154,8 +167,14 @@ MAP_TEMPLATE = """
   #map { height: __HEIGHT__px; width: 100%; border-radius: 6px; }
   #controls { display: flex; align-items: center; gap: 10px; padding: 6px 2px; font-size: 14px; }
   #controls button { padding: 4px 12px; cursor: pointer; }
-  #frame_slider { flex: 1; }
-  #frame_label { min-width: 120px; font-weight: 600; }
+  /* 슬라이더 바탕을 관측(회색) | 예보(주황) 두 색으로 나눠, 지금 어느 구간인지 보이게 */
+  #frame_slider { flex: 1; -webkit-appearance: none; appearance: none; height: 8px; border-radius: 4px; }
+  #frame_slider::-webkit-slider-thumb { -webkit-appearance: none; width: 16px; height: 16px;
+                                        border-radius: 50%; background: #37474f; cursor: pointer; }
+  #frame_slider::-moz-range-thumb { width: 16px; height: 16px; border: none;
+                                    border-radius: 50%; background: #37474f; cursor: pointer; }
+  #frame_label { min-width: 130px; font-weight: 700; color: #37474f; }
+  #frame_label.forecast { color: #e65100; }
   #map { background: #e8eef2; }
   /* 밝은 바탕에서 흰 구름이 묻히지 않도록 회색으로 */
   .cloud_frame { filter: brightness(0.62); }
@@ -173,7 +192,7 @@ MAP_TEMPLATE = """
 <div id="map"></div>
 <script>
   const frames = __FRAMES__;
-  const windData = __WIND__;
+  const windGrids = __WIND_GRIDS__;
   const bounds = __BOUNDS__;
 
   // 남한 전체(수도권~제주)가 화면 절반 폭 지도에 꽉 차는 위치·배율
@@ -181,7 +200,7 @@ MAP_TEMPLATE = """
     .setView([35.7, 127.6], 7);
   // 지명·행정경계 없는 밝은 지도
   L.tileLayer("https://{s}.basemaps.cartocdn.com/rastertiles/voyager_nolabels/{z}/{x}/{y}{r}.png__TILE_KEY_QUERY__", {
-    attribution: "&copy; OpenStreetMap &copy; CARTO | 구름: NASA GIBS (Himawari AHI) | 바람: Open-Meteo (CC BY 4.0)",
+    attribution: "&copy; OpenStreetMap &copy; CARTO | 관측: NASA GIBS (Himawari AHI) | 예보·바람: JMA MSM via Open-Meteo (CC BY 4.0)",
     subdomains: "abcd",
   }).addTo(map);
 
@@ -193,29 +212,22 @@ MAP_TEMPLATE = """
   const playButton = document.getElementById("play_button");
   const showClouds = document.getElementById("show_clouds");
   slider.max = Math.max(frames.length - 1, 0);
+  const firstForecast = frames.findIndex(frame => frame.is_forecast);
+  const forecastStartPercent = firstForecast < 0
+    ? 100 : (firstForecast - 0.5) / Math.max(frames.length - 1, 1) * 100;
+  slider.style.background = "linear-gradient(to right, #b0bec5 0 " + forecastStartPercent
+    + "%, #ffb74d " + forecastStartPercent + "% 100%)";
 
-  let currentFrame = frames.length - 1;
+  let currentFrame = 0;
   function showFrame(index) {
     cloudLayers.forEach((layer, i) =>
       layer.setOpacity(showClouds.checked && i === index ? 0.85 : 0));
     currentFrame = index;
     slider.value = index;
-    frameLabel.textContent = frames.length ? "구름 " + frames[index].label : "구름 자료 없음";
+    frameLabel.textContent = frames[index].label;
+    frameLabel.classList.toggle("forecast", frames[index].is_forecast);
+    showWind(frames[index].wind);
   }
-  showFrame(Math.max(currentFrame, 0));
-
-  let playing = frames.length > 1;
-  setInterval(() => {
-    if (!playing || frames.length < 2) return;
-    showFrame(currentFrame >= frames.length - 1 ? 0 : currentFrame + 1);
-  }, 700);
-  playButton.onclick = () => {
-    playing = !playing;
-    playButton.textContent = playing ? "⏸ 정지" : "▶ 재생";
-  };
-  if (!playing) playButton.textContent = "▶ 재생";
-  slider.oninput = () => { playing = false; playButton.textContent = "▶ 재생"; showFrame(+slider.value); };
-  showClouds.onchange = () => showFrame(currentFrame);
 
   // 도시 이름은 구름·바람 위에 보이도록 별도 pane 에 올린다
   map.createPane("city_pane").style.zIndex = 650;
@@ -225,32 +237,48 @@ MAP_TEMPLATE = """
       .addTo(map);
   });
 
-  // 바람: 성긴 격자를 입자로 흘려 보낸다(빠르기·방향만 감 잡는 용도).
-  let windLayer = null;
-  if (windData) {
-    windLayer = L.velocityLayer({
-      data: windData,
-      displayValues: true,
-      displayOptions: {
-        velocityType: "바람 (__WIND_LABEL__)",
-        position: "bottomleft",
-        emptyString: "바람 자료 없음",
-        speedUnit: "m/s",
-        directionString: "풍향",
-        speedString: "풍속",
-      },
-      minVelocity: 0,
-      maxVelocity: 15,
-      velocityScale: 0.008,
-      particleMultiplier: 1 / 1500,
-      lineWidth: 1.2,
-      // 밝은 바탕·흰 구름 위에서도 보이게 진한 색 — 약하면 파랑, 강해질수록(15m/s 이상) 주황·빨강
-      colorScale: ["#1565c0", "#1e88e5", "#f9a825", "#ef6c00", "#c62828"],
-    }).addTo(map);
+  // 바람: 성긴 격자를 입자로 흘려 보낸다(빠르기·방향만 감 잡는 용도). 화면 시각이 바뀌면 그 시각 격자로.
+  const windLayer = L.velocityLayer({
+    data: null,
+    displayValues: true,
+    displayOptions: {
+      velocityType: "바람",
+      position: "bottomleft",
+      emptyString: "바람 자료 없음",
+      speedUnit: "m/s",
+      directionString: "풍향",
+      speedString: "풍속",
+    },
+    minVelocity: 0,
+    maxVelocity: 15,
+    velocityScale: 0.008,
+    particleMultiplier: 1 / 1500,
+    lineWidth: 1.2,
+    // 밝은 바탕·흰 구름 위에서도 보이게 진한 색 — 약하면 파랑, 강해질수록(15m/s 이상) 주황·빨강
+    colorScale: ["#1565c0", "#1e88e5", "#f9a825", "#ef6c00", "#c62828"],
+  }).addTo(map);
+  let shownWindKey = null;
+  function showWind(windKey) {
+    if (windKey === shownWindKey || !windGrids[windKey]) return;
+    windLayer.setData(windGrids[windKey]);
+    shownWindKey = windKey;
   }
   document.getElementById("show_wind").onchange = event => {
-    if (!windLayer) return;
     if (event.target.checked) windLayer.addTo(map); else map.removeLayer(windLayer);
   };
+
+  showFrame(0);
+  let playing = frames.length > 1;
+  if (!playing) playButton.textContent = "▶ 재생";
+  setInterval(() => {
+    if (!playing) return;
+    showFrame(currentFrame >= frames.length - 1 ? 0 : currentFrame + 1);
+  }, 700);
+  playButton.onclick = () => {
+    playing = !playing;
+    playButton.textContent = playing ? "⏸ 정지" : "▶ 재생";
+  };
+  slider.oninput = () => { playing = false; playButton.textContent = "▶ 재생"; showFrame(+slider.value); };
+  showClouds.onchange = () => showFrame(currentFrame);
 </script>
 """
