@@ -6,6 +6,7 @@ jeju_model 은 이미 매일 12z(00:20 KST)·18z(08:00 KST) cron 으로 est_hori
 (목표 시각마다 지평이 가장 짧고 가장 최근 발표인 값)로 뽑아 자체 forecast_data 테이블에 넣는다.
 
     python sync_forecast.py
+    python sync_forecast.py --start 2025-12-20 --end 2026-09-17   # 지난 기간 일회성 backfill
 
 기상 예보(구름·바람 탭의 표)는 jeju_model 예측에 실제로 들어가는 입력과 같은 출처로 맞춘다:
 일사량·강수량 = forecast_horizon(KIMG, 같은 freshest-wins), 운량 = forecast_jma(JMA, 최신 실행).
@@ -14,6 +15,7 @@ jeju_model 은 이미 매일 12z(00:20 KST)·18z(08:00 KST) cron 으로 est_hori
 """
 import sys
 import os
+import argparse
 import sqlite3
 import time
 import logging
@@ -83,8 +85,11 @@ WEATHER_JMA_SQL = f"""
 """
 
 
-def _sync_window():
-    """동기화 대상 창 = 어제 00시 ~ 오늘+5일 23시 (어제분은 구름·바람 탭의 최근 24시간 표시용)."""
+def _sync_window(start_date=None, end_date=None):
+    """동기화 대상 창. 날짜를 안 주면 어제 00시 ~ 오늘+5일 23시 (어제분은 구름·바람 탭의 최근 24시간 표시용).
+    backfill 때는 start_date 00시 ~ end_date 23시 (날짜는 'YYYY-MM-DD')."""
+    if start_date and end_date:
+        return f"{start_date} 00:00:00", f"{end_date} 23:00:00"
     today = pd.Timestamp.now().normalize()
     start = (today - pd.Timedelta(days=1)).strftime("%Y-%m-%d 00:00:00")
     end = (today + pd.Timedelta(days=DAYS_AHEAD)).strftime("%Y-%m-%d 23:00:00")
@@ -114,28 +119,35 @@ def _query_jeju_model(sql, params, retries=3, retry_wait=2):
     raise last_err
 
 
-def fetch_freshest_forecast():
-    start, end = _sync_window()
+def fetch_freshest_forecast(start, end):
     return _query_jeju_model(FRESHEST_SQL, (HORIZON_MIN, HORIZON_MAX, start, end))
 
 
-def fetch_weather_forecast():
-    start, end = _sync_window()
+def fetch_weather_forecast(start, end):
     kimg = _query_jeju_model(WEATHER_KIMG_SQL, (HORIZON_MIN, HORIZON_MAX, start, end))
     jma = _query_jeju_model(WEATHER_JMA_SQL, (start, end))
     return kimg.merge(jma, on="timestamp", how="outer").sort_values("timestamp")
 
 
 def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--start", help="backfill 시작일 YYYY-MM-DD (--end 와 함께)")
+    parser.add_argument("--end", help="backfill 종료일 YYYY-MM-DD (--start 와 함께)")
+    args = parser.parse_args()
+    if bool(args.start) != bool(args.end):
+        parser.error("--start 와 --end 는 함께 지정해야 합니다.")
+    start, end = _sync_window(args.start, args.end)
+    logger.info(f"동기화 구간: {start} ~ {end}")
+
     init_db()
-    df = fetch_freshest_forecast()
+    df = fetch_freshest_forecast(start, end)
     if df.empty:
         logger.warning("jeju_model 에 동기화할 예측 데이터가 없습니다.")
         return
     save_forecast(df)
     logger.info(f"예측 {len(df)}행 동기화 완료 (base 최신: {df['base'].max()})")
 
-    weather = fetch_weather_forecast()
+    weather = fetch_weather_forecast(start, end)
     save_weather_forecast(weather)
     logger.info(f"기상 예보 {len(weather)}행 동기화 완료")
 
