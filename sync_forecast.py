@@ -38,7 +38,7 @@ DAYS_AHEAD = HORIZON_MAX          # 동기화 대상 창 = 오늘 00시 ~ 오늘
 # est_renew_gen 은 jeju_model 에 저장된 컬럼이 아니라 태양광+풍력 합으로 여기서 구성한다
 # (jeju_model pages/common.py jeju_range_compare 와 동일한 방식).
 FRESHEST_SQL = """
-    SELECT timestamp, base, horizon_d,
+    SELECT timestamp, base, horizon_d, solar_model,
            est_demand_jeju AS est_demand,
            est_solar_gen_jeju AS est_solar_gen,
            est_wind_gen_jeju AS est_wind_gen,

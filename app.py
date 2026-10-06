@@ -68,6 +68,26 @@ def _shift(delta):
     st.session_state[DAY_KEY] = st.session_state[DAY_KEY] + pd.Timedelta(days=delta)
 
 
+SOLAR_MODEL_NAMES = {"patchtst": "PatchTST", "patchtst_bridge": "PatchTST(임시)", "lgbm": "LGBM"}
+
+
+def solar_model_caption(df):
+    """날짜별 태양광 모델을 이어지는 날끼리 묶어 '10-06 PatchTST(임시), 10-07~10-08 PatchTST' 형태로.
+    jeju_model 이 모델을 기록하기 전(2026-10-06 이전) 예측은 기록이 없어 빠진다."""
+    daily = df.dropna(subset=["solar_model"]).groupby(df["timestamp"].dt.date)["solar_model"].first()
+    groups = []   # [첫 날, 마지막 날, 모델]
+    for day, model in daily.items():
+        if groups and groups[-1][2] == model and (day - groups[-1][1]).days == 1:
+            groups[-1][1] = day
+        else:
+            groups.append([day, day, model])
+    parts = []
+    for first_day, last_day, model in groups:
+        days = f"{first_day:%m-%d}" if first_day == last_day else f"{first_day:%m-%d}~{last_day:%m-%d}"
+        parts.append(f"{days} {SOLAR_MODEL_NAMES.get(model, model)}")
+    return ", ".join(parts)
+
+
 # 구름·바람 탭은 열려 있을 때만 그린다(on_change="rerun" + .open) — 구름 프레임이 1MB 가까이 돼
 # 예측 탭에서 버튼을 누를 때마다 지도까지 다시 보내지 않도록. 예측 탭은 항상 그려야
 # 탭을 오가도 날짜·표시·경고 선택이 초기화되지 않는다.
@@ -113,18 +133,18 @@ with forecast_tab:
     )
     st.plotly_chart(fig, width="stretch")
 
-    # 현재 화면에 표시 중인 예측이 언제 생성(발표)된 것인지 표시.
+    # 현재 화면에 표시 중인 예측이 언제 생성(발표)된 것인지 + 태양광을 어느 모델로 냈는지 표시.
     # 여러 날을 함께 보면 지평(horizon_d)별로 발표 시각이 다를 수 있어 최소~최대로 보여준다.
     forecast_bases = pd.to_datetime(df["base"].dropna().unique())
     if len(forecast_bases) == 0:
-        st.caption("예측 생성 시각: 정보 없음")
+        base_text = "정보 없음"
     elif len(forecast_bases) == 1:
-        st.caption(f"예측 생성 시각: {forecast_bases[0]:%Y-%m-%d %H:%M} 발표")
+        base_text = f"{forecast_bases[0]:%Y-%m-%d %H:%M} 발표"
     else:
-        st.caption(
-            f"예측 생성 시각: {forecast_bases.min():%Y-%m-%d %H:%M} ~ "
-            f"{forecast_bases.max():%Y-%m-%d %H:%M} 발표 (지평별로 발표 시각이 다름)"
-        )
+        base_text = (f"{forecast_bases.min():%Y-%m-%d %H:%M} ~ "
+                     f"{forecast_bases.max():%Y-%m-%d %H:%M} 발표 (지평별로 발표 시각이 다름)")
+    model_text = solar_model_caption(df)
+    st.caption(f"예측 생성 시각: {base_text}" + (f" · 태양광 모델: {model_text}" if model_text else ""))
 
 if weather_tab.open:
     with weather_tab:

@@ -50,7 +50,8 @@ def init_db(db_path=DB_PATH):
     _ensure_columns(con, "weather_forecast", [(c, "REAL") for c in WEATHER_COLS] + [("updated_at", "TEXT")])
     _ensure_columns(con, "historical_data", [(c, "REAL") for c in HIST_COLS] + [("updated_at", "TEXT")])
     _ensure_columns(con, "forecast_data",
-                    [(c, "REAL") for c in FCST_COLS] + [("horizon_d", "INTEGER"), ("base", "TEXT"), ("updated_at", "TEXT")])
+                    [(c, "REAL") for c in FCST_COLS]
+                    + [("horizon_d", "INTEGER"), ("base", "TEXT"), ("solar_model", "TEXT"), ("updated_at", "TEXT")])
     con.commit()
     con.close()
 
@@ -77,7 +78,8 @@ def save_historical(df, db_path=DB_PATH):
 
 
 def save_forecast(df, db_path=DB_PATH):
-    """예측 upsert — jeju_model 에서 새로 받은 값으로 항상 덮어쓴다(freshest-wins 이미 적용됨)."""
+    """예측 upsert — jeju_model 에서 새로 받은 값으로 항상 덮어쓴다(freshest-wins 이미 적용됨).
+    solar_model = 태양광을 낸 모델(patchtst / patchtst_bridge / lgbm, 캡션 표시용)."""
     if df.empty:
         return
     now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
@@ -88,14 +90,16 @@ def save_forecast(df, db_path=DB_PATH):
     for row in df.itertuples(index=False):
         row_d = row._asdict()
         con.execute(f"""
-            INSERT INTO forecast_data (timestamp, {collist}, horizon_d, base, updated_at)
-            VALUES (?, {placeholders}, ?, ?, ?)
+            INSERT INTO forecast_data (timestamp, {collist}, horizon_d, base, solar_model, updated_at)
+            VALUES (?, {placeholders}, ?, ?, ?, ?)
             ON CONFLICT(timestamp) DO UPDATE SET
                 {overwrite_set},
                 horizon_d = excluded.horizon_d,
                 base = excluded.base,
+                solar_model = excluded.solar_model,
                 updated_at = excluded.updated_at
-        """, (row_d["timestamp"], *[row_d.get(c) for c in FCST_COLS], row_d["horizon_d"], row_d["base"], now))
+        """, (row_d["timestamp"], *[row_d.get(c) for c in FCST_COLS], row_d["horizon_d"], row_d["base"],
+              row_d.get("solar_model"), now))
     con.commit()
     con.close()
 
@@ -112,7 +116,7 @@ def load_range(start, end, db_path=DB_PATH):
         f"SELECT timestamp, {', '.join(HIST_COLS)} FROM historical_data WHERE timestamp BETWEEN ? AND ?",
         con, params=(start, end))
     fcst = pd.read_sql_query(
-        f"SELECT timestamp, base, {', '.join(FCST_COLS)} FROM forecast_data WHERE timestamp BETWEEN ? AND ?",
+        f"SELECT timestamp, base, solar_model, {', '.join(FCST_COLS)} FROM forecast_data WHERE timestamp BETWEEN ? AND ?",
         con, params=(start, end))
     con.close()
     base = pd.DataFrame({"timestamp": pd.date_range(start, end, freq="h").strftime('%Y-%m-%d %H:%M:%S')})
